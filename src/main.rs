@@ -190,7 +190,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .split(f.size());
 
     // Create ListItems for each directory entry
-    let mut list_items: Vec<ListItem> = app.dir_list.items
+    let list_items: Vec<ListItem> = app.dir_list.items
         .iter()
         .map(|item| {
             // The item gets its own line
@@ -207,8 +207,11 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             ListItem::new(vec![line])
         })
         .collect();
+
+    /*
     let parent_dir = Spans::from(vec![Span::styled("..", Style::default().add_modifier(Modifier::BOLD))]);
     list_items.insert(0, ListItem::new(vec![parent_dir]));
+     */
 
     // Add the items to the list, highlighting
     let items_list = List::new(list_items)
