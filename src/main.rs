@@ -1,23 +1,23 @@
+use std::{
+    cmp::Ordering,
+    error::Error,
+    fs,
+    fs::DirEntry,
+    io,
+    time::{Duration, Instant},
+};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use std::{
-    error::Error,
-    fs,
-    io,
-    time::{Duration, Instant},
-};
-use std::cmp::Ordering;
-use std::fs::DirEntry;
 use tui::{
     backend::{Backend, CrosstermBackend},
+    Frame,
     layout::{Constraint, Corner, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Span, Spans},
-    widgets::{Block, Borders, List, ListItem, ListState},
-    Frame, Terminal,
+    Terminal,
+    text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState},
 };
 
 /// This struct holds the current state of the app. In particular, it has the `items` field which is a wrapper
