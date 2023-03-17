@@ -23,9 +23,6 @@ use tui::{
 /// This struct holds the current state of the app. In particular, it has the `items` field which is a wrapper
 /// around `ListState`. Keeping track of the items state let us render the associated widget with its state
 /// and have access to features such as natural scrolling.
-///
-/// Check the event handling at the bottom to see how to change the state on incoming events.
-/// Check the drawing logic for items on how to specify the highlighting style for selected items.
 struct DirectoryList {
     state: ListState,
     items: Vec<DirEntry>,
@@ -35,7 +32,6 @@ impl DirectoryList {
     fn refresh(&mut self, dir: &str) {
         self.items.clear();
         self.items = fs::read_dir(dir).unwrap().into_iter().map(|x| x.unwrap()).collect();
-        fs::read_dir(format!("{}/..", dir)).unwrap();
         self.items.sort_by(|a, b| DirectoryList::compare_dir_items(a, b));
     }
 
@@ -43,12 +39,12 @@ impl DirectoryList {
         let a_file_type = a.file_type().unwrap();
         let b_file_type = b.file_type().unwrap();
 
-        if a_file_type.is_dir() && !b_file_type.is_dir() {
-            return Ordering::Less;
+        return if a_file_type.is_dir() && !b_file_type.is_dir() {
+            Ordering::Less
         } else if !a_file_type.is_dir() && b_file_type.is_dir() {
-            return Ordering::Greater;
+            Ordering::Greater
         } else {
-            return a.file_name().cmp(&b.file_name());
+            a.file_name().cmp(&b.file_name())
         }
     }
 
@@ -214,7 +210,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
      */
 
     // Add the items to the list, highlighting
-    let items_list = List::new(list_items)
+    let tui_list = List::new(list_items)
         .block(Block::default().borders(Borders::ALL).title(app.dir.as_str()))
         .start_corner(Corner::TopLeft)
         .highlight_style(
@@ -223,7 +219,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                 .add_modifier(Modifier::BOLD),
         );
 
-    f.render_stateful_widget(items_list, chunks[0], &mut app.dir_list.state);
+    f.render_stateful_widget(tui_list, chunks[0], &mut app.dir_list.state);
 
     let events: Vec<ListItem> = app
         .events
