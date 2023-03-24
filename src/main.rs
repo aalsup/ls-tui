@@ -20,31 +20,57 @@ use tui::{
     text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState},
 };
 
+#[derive(Debug)]
+enum DirectoryListItem {
+    Entry(DirEntry),
+    String(String)
+}
+
 /// This struct holds the current state of the app. In particular, it has the `items` field which is a wrapper
 /// around `ListState`. Keeping track of the items state let us render the associated widget with its state
 /// and have access to features such as natural scrolling.
+#[derive(Debug)]
 struct DirectoryList {
     state: ListState,
-    items: Vec<DirEntry>,
+    items: Vec<DirectoryListItem>,
 }
 
 impl DirectoryList {
     fn refresh(&mut self, dir: &str) {
         self.items.clear();
-        self.items = fs::read_dir(dir).unwrap().into_iter().map(|x| x.unwrap()).collect();
+        // read all the items in the directory
+        self.items = fs::read_dir(dir).unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .map(|x| DirectoryListItem::Entry(x))
+            .collect();
+        self.items.insert(0, DirectoryListItem::String("..".to_string()));
         self.items.sort_by(|a, b| DirectoryList::compare_dir_items(a, b));
     }
 
-    fn compare_dir_items(a: &DirEntry, b: &DirEntry) -> Ordering {
-        let a_file_type = a.file_type().unwrap();
-        let b_file_type = b.file_type().unwrap();
+    fn compare_dir_items(a: &DirectoryListItem, b: &DirectoryListItem) -> Ordering {
+        match (a, b) {
+            (DirectoryListItem::String(a_str), DirectoryListItem::String(b_str)) => {
+                a_str.cmp(b_str)
+            },
+            (DirectoryListItem::String(_), DirectoryListItem::Entry(_)) => {
+                Ordering::Less
+            },
+            (DirectoryListItem::Entry(_), DirectoryListItem::String(_)) => {
+                Ordering::Greater
+            },
+            (DirectoryListItem::Entry(a), DirectoryListItem::Entry(b)) => {
+                let a_file_type = a.file_type().unwrap();
+                let b_file_type = b.file_type().unwrap();
 
-        return if a_file_type.is_dir() && !b_file_type.is_dir() {
-            Ordering::Less
-        } else if !a_file_type.is_dir() && b_file_type.is_dir() {
-            Ordering::Greater
-        } else {
-            a.file_name().cmp(&b.file_name())
+                return if a_file_type.is_dir() && !b_file_type.is_dir() {
+                    Ordering::Less
+                } else if !a_file_type.is_dir() && b_file_type.is_dir() {
+                    Ordering::Greater
+                } else {
+                    a.file_name().cmp(&b.file_name())
+                }
+            }
         }
     }
 
@@ -189,18 +215,28 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     let list_items: Vec<ListItem> = app.dir_list.items
         .iter()
         .map(|item| {
-            // The item gets its own line
-            let file_name = item.file_name().into_string().unwrap();
-            let mut style = Style::default();
-            if item.file_type().unwrap().is_dir() {
-                style = style.add_modifier(Modifier::BOLD);
-            }
-            if item.file_type().unwrap().is_symlink() {
-                style = style.add_modifier(Modifier::ITALIC);
-            }
-            let line = Spans::from(vec![Span::styled(file_name, style)]);
+            match item {
+                DirectoryListItem::String(item) => {
+                    let file_name = item;
+                    let line = Spans::from(vec![Span::styled(file_name, Style::default())]);
 
-            ListItem::new(vec![line])
+                    ListItem::new(vec![line])
+                }
+                DirectoryListItem::Entry(item) => {
+                    // The item gets its own line
+                    let file_name = item.file_name().into_string().unwrap();
+                    let mut style = Style::default();
+                    if item.file_type().unwrap().is_dir() {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    if item.file_type().unwrap().is_symlink() {
+                        style = style.add_modifier(Modifier::ITALIC);
+                    }
+                    let line = Spans::from(vec![Span::styled(file_name, style)]);
+
+                    ListItem::new(vec![line])
+                }
+            }
         })
         .collect();
 
