@@ -216,6 +216,7 @@ dependencies = [
  "crossterm 0.26.1",
  "tui",
  "unix_permissions_ext",
+ "users",
 ]
 
 [[package]]
@@ -440,6 +441,16 @@ name = "unix_permissions_ext"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7497808a85e03f612f13e9c5061e4c81cdee86e6c00adfa1096690990ccd08e9"
+
+[[package]]
+name = "users"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24cc0f6d6f267b73e5a2cadf007ba8f9bc39c6a6f9666f8cf25ea809a153b032"
+dependencies = [
+ "libc",
+ "log",
+]
 
 [[package]]
 name = "utf8-width"

@@ -11,3 +11,4 @@ crossterm = "0.26.1"
 clap = { version = "4.1.9", features = ["derive"] }
 byte-unit = "4.0.19"
 unix_permissions_ext = "0.1.2"
+users = "0.11.0"

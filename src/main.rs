@@ -10,6 +10,7 @@ use std::{
 };
 //use std::os::macos::fs::MetadataExt;
 use std::fs::Metadata;
+use std::os::macos::fs::MetadataExt;
 use unix_permissions_ext::UNIXPermissionsExt;
 
 use crossterm::{
@@ -27,6 +28,7 @@ use tui::{
 };
 use tui::widgets::{Row, Table, TableState};
 use byte_unit::Byte;
+use users::get_user_by_uid;
 
 #[derive(Debug)]
 enum DirectoryListItem {
@@ -250,12 +252,17 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                         let adjusted_byte = byte.get_appropriate_unit(false);
                         filesize_str = adjusted_byte.to_string();
                     }
-                    let perms = item.metadata().unwrap().permissions();
+                    let meta = item.metadata().unwrap();
+                    let uid = meta.st_uid();
+                    let user: String = get_user_by_uid(uid).unwrap().name().to_os_string().into_string().unwrap();
+                    let gid = meta.st_gid().to_string();
+                    let perms = meta.permissions();
                     let perms_str = perms.stringify();
                     let user_perms = perms_str[0..3].to_string();
                     let group_perms = perms_str[3..6].to_string();
+                    let other_perms = perms_str[6..9].to_string();
 
-                    Row::new(vec![file_name, filesize_str, user_perms, group_perms]).style(style)
+                    Row::new(vec![file_name, filesize_str, user, gid, user_perms, group_perms, other_perms]).style(style)
                 }
             }
         })
@@ -263,15 +270,15 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
 
     let table = Table::new(rows)
         .header(
-            Row::new(vec!["Name", "Size", "User", "Group", "rwx", "rwx", "rwx"])
+            Row::new(vec!["Name", "Size", "User", "Group", "Usr", "Grp", "Oth"])
                 .style(Style::default().fg(Color::Yellow))
                 .bottom_margin(1),
         )
         .highlight_style(style.bg(Color::Gray).fg(Color::DarkGray))
         .block(Block::default().title(app.dir.as_str()).borders(Borders::ALL))
         .widths(&[
-            Constraint::Length(40),
-            Constraint::Length(12),
+            Constraint::Length(20),
+            Constraint::Length(10),
             Constraint::Length(12),
             Constraint::Length(12),
             Constraint::Length(3),
