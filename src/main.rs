@@ -1,3 +1,5 @@
+extern crate byte_unit;
+
 use std::{
     cmp::Ordering,
     error::Error,
@@ -6,6 +8,10 @@ use std::{
     io,
     time::{Duration, Instant},
 };
+//use std::os::macos::fs::MetadataExt;
+use std::fs::Metadata;
+use unix_permissions_ext::UNIXPermissionsExt;
+
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -19,6 +25,8 @@ use tui::{
     Terminal,
     text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState},
 };
+use tui::widgets::{Row, Table, TableState};
+use byte_unit::Byte;
 
 #[derive(Debug)]
 enum DirectoryListItem {
@@ -31,7 +39,7 @@ enum DirectoryListItem {
 /// and have access to features such as natural scrolling.
 #[derive(Debug)]
 struct DirectoryList {
-    state: ListState,
+    state: TableState,
     items: Vec<DirectoryListItem>,
 }
 
@@ -77,10 +85,10 @@ impl DirectoryList {
     fn next(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
-                if i >= self.items.len() - 1 {
-                    0
-                } else {
+                if i < self.items.len() - 1 {
                     i + 1
+                } else {
+                    self.items.len() - 1
                 }
             }
             None => 0,
@@ -91,10 +99,10 @@ impl DirectoryList {
     fn previous(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
-                if i == 0 {
-                    self.items.len() - 1
-                } else {
+                if i > 0 {
                     i - 1
+                } else {
+                    0
                 }
             }
             None => 0,
@@ -118,7 +126,7 @@ impl App {
         App {
             dir: ".".to_string(),
             dir_list: DirectoryList {
-                state: ListState::default(),
+                state: TableState::default(),
                 items: vec!(),
             },
             events: vec!(),
@@ -211,51 +219,66 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
         .split(f.size());
 
-    // Create ListItems for each directory entry
-    let list_items: Vec<ListItem> = app.dir_list.items
+    let style = Style::default();
+    let dir_style = style.add_modifier(Modifier::BOLD);
+    let link_style = style.add_modifier(Modifier::ITALIC);
+
+    let rows: Vec<Row> = app.dir_list.items
         .iter()
         .map(|item| {
             match item {
                 DirectoryListItem::String(item) => {
                     let file_name = item;
-                    let line = Spans::from(vec![Span::styled(file_name, Style::default())]);
-
-                    ListItem::new(vec![line])
+                    Row::new(vec![file_name.as_str()]).style(dir_style)
                 }
                 DirectoryListItem::Entry(item) => {
                     // The item gets its own line
                     let file_name = item.file_name().into_string().unwrap();
+                    // determine the type of file (directory, symlink, etc.)
                     let mut style = Style::default();
                     if item.file_type().unwrap().is_dir() {
-                        style = style.add_modifier(Modifier::BOLD);
+                        style = dir_style;
                     }
                     if item.file_type().unwrap().is_symlink() {
-                        style = style.add_modifier(Modifier::ITALIC);
+                        style = link_style
                     }
-                    let line = Spans::from(vec![Span::styled(file_name, style)]);
+                    let mut filesize_str = "".to_string();
+                    if !item.file_type().unwrap().is_dir() {
+                        // determine the size
+                        let file_size = item.metadata().unwrap().len();
+                        let byte = Byte::from_bytes(file_size.into());
+                        let adjusted_byte = byte.get_appropriate_unit(false);
+                        filesize_str = adjusted_byte.to_string();
+                    }
+                    let perms = item.metadata().unwrap().permissions();
+                    let perms_str = perms.stringify();
+                    let user_perms = perms_str[0..3].to_string();
+                    let group_perms = perms_str[3..6].to_string();
 
-                    ListItem::new(vec![line])
+                    Row::new(vec![file_name, filesize_str, user_perms, group_perms]).style(style)
                 }
             }
         })
         .collect();
 
-    /*
-    let parent_dir = Spans::from(vec![Span::styled("..", Style::default().add_modifier(Modifier::BOLD))]);
-    list_items.insert(0, ListItem::new(vec![parent_dir]));
-     */
-
-    // Add the items to the list, highlighting
-    let tui_list = List::new(list_items)
-        .block(Block::default().borders(Borders::ALL).title(app.dir.as_str()))
-        .start_corner(Corner::TopLeft)
-        .highlight_style(
-            Style::default()
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-
-    f.render_stateful_widget(tui_list, chunks[0], &mut app.dir_list.state);
+    let table = Table::new(rows)
+        .header(
+            Row::new(vec!["Name", "Size", "User", "Group", "rwx", "rwx", "rwx"])
+                .style(Style::default().fg(Color::Yellow))
+                .bottom_margin(1),
+        )
+        .highlight_style(style.bg(Color::Gray).fg(Color::DarkGray))
+        .block(Block::default().title(app.dir.as_str()).borders(Borders::ALL))
+        .widths(&[
+            Constraint::Length(40),
+            Constraint::Length(12),
+            Constraint::Length(12),
+            Constraint::Length(12),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(3)
+        ]);
+    f.render_stateful_widget(table, chunks[0], &mut app.dir_list.state);
 
     let events: Vec<ListItem> = app
         .events
