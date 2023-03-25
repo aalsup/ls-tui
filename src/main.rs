@@ -1,5 +1,3 @@
-extern crate byte_unit;
-
 use std::{
     cmp::Ordering,
     error::Error,
@@ -8,11 +6,10 @@ use std::{
     io,
     time::{Duration, Instant},
 };
-//use std::os::macos::fs::MetadataExt;
-use std::fs::Metadata;
 use std::os::macos::fs::MetadataExt;
 use unix_permissions_ext::UNIXPermissionsExt;
 
+use byte_unit::Byte;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -20,20 +17,18 @@ use crossterm::{
 };
 use tui::{
     backend::{Backend, CrosstermBackend},
-    Frame,
     layout::{Constraint, Corner, Direction, Layout},
     style::{Color, Modifier, Style},
-    Terminal,
-    text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState},
+    text::{Span, Spans},
+    widgets::{Block, Borders, List, ListItem, Row, Table, TableState},
+    Frame, Terminal,
 };
-use tui::widgets::{Row, Table, TableState};
-use byte_unit::Byte;
 use users::get_user_by_uid;
 
 #[derive(Debug)]
 enum DirectoryListItem {
     Entry(DirEntry),
-    String(String)
+    String(String),
 }
 
 /// This struct holds the current state of the app. In particular, it has the `items` field which is a wrapper
@@ -49,26 +44,25 @@ impl DirectoryList {
     fn refresh(&mut self, dir: &str) {
         self.items.clear();
         // read all the items in the directory
-        self.items = fs::read_dir(dir).unwrap()
+        self.items = fs::read_dir(dir)
+            .unwrap()
             .into_iter()
             .map(|x| x.unwrap())
             .map(|x| DirectoryListItem::Entry(x))
             .collect();
-        self.items.insert(0, DirectoryListItem::String("..".to_string()));
-        self.items.sort_by(|a, b| DirectoryList::compare_dir_items(a, b));
+        self.items
+            .insert(0, DirectoryListItem::String("..".to_string()));
+        self.items
+            .sort_by(|a, b| DirectoryList::compare_dir_items(a, b));
     }
 
     fn compare_dir_items(a: &DirectoryListItem, b: &DirectoryListItem) -> Ordering {
         match (a, b) {
             (DirectoryListItem::String(a_str), DirectoryListItem::String(b_str)) => {
                 a_str.cmp(b_str)
-            },
-            (DirectoryListItem::String(_), DirectoryListItem::Entry(_)) => {
-                Ordering::Less
-            },
-            (DirectoryListItem::Entry(_), DirectoryListItem::String(_)) => {
-                Ordering::Greater
-            },
+            }
+            (DirectoryListItem::String(_), DirectoryListItem::Entry(_)) => Ordering::Less,
+            (DirectoryListItem::Entry(_), DirectoryListItem::String(_)) => Ordering::Greater,
             (DirectoryListItem::Entry(a), DirectoryListItem::Entry(b)) => {
                 let a_file_type = a.file_type().unwrap();
                 let b_file_type = b.file_type().unwrap();
@@ -79,7 +73,7 @@ impl DirectoryList {
                     Ordering::Greater
                 } else {
                     a.file_name().cmp(&b.file_name())
-                }
+                };
             }
         }
     }
@@ -129,17 +123,15 @@ impl App {
             dir: ".".to_string(),
             dir_list: DirectoryList {
                 state: TableState::default(),
-                items: vec!(),
+                items: vec![],
             },
-            events: vec!(),
+            events: vec![],
         }
     }
 
     // Do something every so often
-    fn on_tick(&mut self) {
-    }
+    fn on_tick(&mut self) {}
 }
-
 
 fn main() -> Result<(), Box<dyn Error>> {
     // setup terminal
@@ -154,7 +146,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let app = App::new();
     let res = run_app(&mut terminal, app, tick_rate);
 
-   // restore terminal
+    // restore terminal
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -194,15 +186,21 @@ fn run_app<B: Backend>(
                     KeyCode::Char('h') | KeyCode::Left => {
                         app.dir_list.unselect();
                         app.events.push("Unselect".to_string());
-                    },
+                    }
                     KeyCode::Char('j') | KeyCode::Down => {
                         app.dir_list.next();
-                        app.events.push(format!("Next => {}", app.dir_list.state.selected().unwrap()));
-                    },
+                        app.events.push(format!(
+                            "Next => {}",
+                            app.dir_list.state.selected().unwrap()
+                        ));
+                    }
                     KeyCode::Char('k') | KeyCode::Up => {
                         app.dir_list.previous();
-                        app.events.push(format!("Previous => {}", app.dir_list.state.selected().unwrap()));
-                    },
+                        app.events.push(format!(
+                            "Previous => {}",
+                            app.dir_list.state.selected().unwrap()
+                        ));
+                    }
                     _ => {}
                 }
             }
@@ -225,7 +223,9 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     let dir_style = style.add_modifier(Modifier::BOLD);
     let link_style = style.add_modifier(Modifier::ITALIC);
 
-    let rows: Vec<Row> = app.dir_list.items
+    let rows: Vec<Row> = app
+        .dir_list
+        .items
         .iter()
         .map(|item| {
             match item {
@@ -254,7 +254,12 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                     }
                     let meta = item.metadata().unwrap();
                     let uid = meta.st_uid();
-                    let user: String = get_user_by_uid(uid).unwrap().name().to_os_string().into_string().unwrap();
+                    let user: String = get_user_by_uid(uid)
+                        .unwrap()
+                        .name()
+                        .to_os_string()
+                        .into_string()
+                        .unwrap();
                     let gid = meta.st_gid().to_string();
                     let perms = meta.permissions();
                     let perms_str = perms.stringify();
@@ -262,7 +267,16 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                     let group_perms = perms_str[3..6].to_string();
                     let other_perms = perms_str[6..9].to_string();
 
-                    Row::new(vec![file_name, filesize_str, user, gid, user_perms, group_perms, other_perms]).style(style)
+                    Row::new(vec![
+                        file_name,
+                        filesize_str,
+                        user,
+                        gid,
+                        user_perms,
+                        group_perms,
+                        other_perms,
+                    ])
+                    .style(style)
                 }
             }
         })
@@ -275,7 +289,11 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                 .bottom_margin(1),
         )
         .highlight_style(style.bg(Color::Gray).fg(Color::DarkGray))
-        .block(Block::default().title(app.dir.as_str()).borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(app.dir.as_str())
+                .borders(Borders::ALL),
+        )
         .widths(&[
             Constraint::Length(20),
             Constraint::Length(10),
@@ -283,7 +301,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             Constraint::Length(12),
             Constraint::Length(3),
             Constraint::Length(3),
-            Constraint::Length(3)
+            Constraint::Length(3),
         ]);
     f.render_stateful_widget(table, chunks[0], &mut app.dir_list.state);
 
