@@ -12,4 +12,4 @@ clap = { version = "4.1.9", features = ["derive"] }
 byte-unit = "4.0.19"
 unix_permissions_ext = "0.1.2"
 users = "0.11.0"
-pathtrim = "1.0.6"
+tree_magic_mini = "3.0.3"

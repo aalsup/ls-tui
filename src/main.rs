@@ -26,6 +26,7 @@ use tui::{
     Frame, Terminal,
 };
 use users::get_user_by_uid;
+use tree_magic_mini::from_filepath;
 
 #[derive(Debug)]
 enum DirectoryListItem {
@@ -250,6 +251,10 @@ fn run_app<B: Backend>(
                             DirectoryListItem::Entry(entry) => {
                                 if entry.file_type().unwrap().is_dir() {
                                    app.navigate_to_relative_directory(entry.file_name().into_string().unwrap())
+                                } else {
+                                    if let Some(mime_type) = tree_magic_mini::from_filepath(&entry.path()) {
+                                        app.events.push(format!("File type: {}", mime_type.to_string()));
+                                    }
                                 }
                             }
                         }
