@@ -6,6 +6,8 @@ use std::{
     io,
     time::{Duration, Instant},
 };
+use std::path::Path;
+// at the top of your source file
 use std::os::macos::fs::MetadataExt;
 use unix_permissions_ext::UNIXPermissionsExt;
 
@@ -54,6 +56,10 @@ impl DirectoryList {
             .insert(0, DirectoryListItem::String("..".to_string()));
         self.items
             .sort_by(|a, b| DirectoryList::compare_dir_items(a, b));
+
+        if self.state.selected() == None {
+            self.state.select(Some(0));
+        }
     }
 
     fn compare_dir_items(a: &DirectoryListItem, b: &DirectoryListItem) -> Ordering {
@@ -78,7 +84,22 @@ impl DirectoryList {
         }
     }
 
-    fn next(&mut self) {
+    fn select_by_name(&mut self, name: &str) {
+        self.unselect();
+        for (i, x) in self.items.iter().enumerate() {
+            match x {
+                DirectoryListItem::Entry(entry) => {
+                   if name.eq(entry.file_name().into_string().unwrap().as_str()) {
+                       self.state.select(Some(i));
+                       break;
+                   }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn select_next(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
                 if i < self.items.len() - 1 {
@@ -92,7 +113,7 @@ impl DirectoryList {
         self.state.select(Some(i));
     }
 
-    fn previous(&mut self) {
+    fn select_previous(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
                 if i > 0 {
@@ -131,7 +152,39 @@ impl App {
 
     // Do something every so often
     fn on_tick(&mut self) {
+        self.dir = Path::new(self.dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
         self.dir_list.refresh(self.dir.as_str());
+    }
+
+    fn navigate_to_relative_directory(&mut self, chg_dir: String) {
+        // save the current info
+        let cur_path_str = &self.dir.clone();
+        let cur_path = Path::new(cur_path_str);
+        let chg_path = cur_path.join(chg_dir).canonicalize().unwrap();
+
+        // update the current info
+        self.dir = chg_path.to_str().unwrap().to_string();
+        self.dir_list.refresh(&self.dir);
+
+        let cur_path_str = cur_path.to_str().unwrap().to_string();
+        let chg_path_str = chg_path.to_str().unwrap().to_string();
+        if cur_path_str.contains(&chg_path_str) {
+            // going to parent dir, try to select the proper child
+            if let Some(basename) = cur_path_str.strip_prefix(chg_path_str.as_str()) {
+                let mut basename = basename.to_string();
+                if let Some(new_basename) = basename.strip_prefix("/") {
+                    basename = new_basename.to_string();
+                }
+                self.events.push(format!("{}: {}", "select_by_name", basename));
+                self.dir_list.select_by_name(basename.as_str());
+            }
+        } else {
+            self.dir_list.state.select(Some(0));
+        }
+    }
+
+    fn navigate_to_parent_directory(&mut self) {
+       self.navigate_to_relative_directory("..".to_string());
     }
 }
 
@@ -185,23 +238,39 @@ fn run_app<B: Backend>(
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Char('h') | KeyCode::Left => {
-                        app.dir_list.unselect();
-                        app.events.push("Unselect".to_string());
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        app.events.push("Action on selected".to_string());
+                        // get the selected item
+                        let sel_idx = app.dir_list.state.selected().unwrap();
+                        let sel_item = &app.dir_list.items[sel_idx];
+                        match sel_item {
+                            DirectoryListItem::String(chg_dir) => {
+                                app.navigate_to_relative_directory(chg_dir.to_owned());
+                            }
+                            DirectoryListItem::Entry(entry) => {
+                                if entry.file_type().unwrap().is_dir() {
+                                   app.navigate_to_relative_directory(entry.file_name().into_string().unwrap())
+                                }
+                            }
+                        }
                     }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        app.dir_list.next();
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        app.dir_list.select_next();
                         app.events.push(format!(
                             "Next => {}",
                             app.dir_list.state.selected().unwrap()
                         ));
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        app.dir_list.previous();
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app.dir_list.select_previous();
                         app.events.push(format!(
                             "Previous => {}",
                             app.dir_list.state.selected().unwrap()
                         ));
+                    }
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        app.events.push(format!("Parent Dir"));
+                        app.navigate_to_parent_directory();
                     }
                     _ => {}
                 }
