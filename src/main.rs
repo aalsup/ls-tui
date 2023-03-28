@@ -25,6 +25,7 @@ use tui::{
     widgets::{Block, Borders, List, ListItem, Row, Table, TableState},
     Frame, Terminal,
 };
+use tui::widgets::ListState;
 use users::get_user_by_uid;
 use tree_magic_mini::from_filepath;
 
@@ -137,6 +138,7 @@ struct App {
     dir: String,
     dir_list: DirectoryList,
     events: Vec<String>,
+    event_list_state: ListState
 }
 
 impl App {
@@ -148,6 +150,7 @@ impl App {
                 items: vec![],
             },
             events: vec![],
+            event_list_state: ListState::default()
         }
     }
 
@@ -176,7 +179,7 @@ impl App {
                 if let Some(new_basename) = basename.strip_prefix("/") {
                     basename = new_basename.to_string();
                 }
-                self.events.push(format!("{}: {}", "select_by_name", basename));
+                self.add_event(format!("{}: {}", "select_by_name", basename));
                 self.dir_list.select_by_name(basename.as_str());
             }
         } else {
@@ -186,6 +189,13 @@ impl App {
 
     fn navigate_to_parent_directory(&mut self) {
        self.navigate_to_relative_directory("..".to_string());
+    }
+
+    fn add_event(&mut self, event: String) {
+       while self.events.len() > 5 {
+           self.events.remove(0);
+       }
+        self.events.push(event);
     }
 }
 
@@ -240,7 +250,7 @@ fn run_app<B: Backend>(
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
                     KeyCode::Enter | KeyCode::Char(' ') => {
-                        app.events.push("Action on selected".to_string());
+                        app.add_event("Action on selected".to_string());
                         // get the selected item
                         let sel_idx = app.dir_list.state.selected().unwrap();
                         let sel_item = &app.dir_list.items[sel_idx];
@@ -253,7 +263,7 @@ fn run_app<B: Backend>(
                                    app.navigate_to_relative_directory(entry.file_name().into_string().unwrap())
                                 } else {
                                     if let Some(mime_type) = tree_magic_mini::from_filepath(&entry.path()) {
-                                        app.events.push(format!("File type: {}", mime_type.to_string()));
+                                        app.add_event(format!("File type: {}", mime_type.to_string()));
                                     }
                                 }
                             }
@@ -261,20 +271,20 @@ fn run_app<B: Backend>(
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         app.dir_list.select_next();
-                        app.events.push(format!(
+                        app.add_event(format!(
                             "Next => {}",
                             app.dir_list.state.selected().unwrap()
                         ));
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
                         app.dir_list.select_previous();
-                        app.events.push(format!(
+                        app.add_event(format!(
                             "Previous => {}",
                             app.dir_list.state.selected().unwrap()
                         ));
                     }
                     KeyCode::Left | KeyCode::Char('h') => {
-                        app.events.push(format!("Parent Dir"));
+                        app.add_event(format!("Parent Dir"));
                         app.navigate_to_parent_directory();
                     }
                     _ => {}
@@ -290,10 +300,15 @@ fn run_app<B: Backend>(
 
 fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     // Create two chunks with equal horizontal screen space
-    let chunks = Layout::default()
+    let h_panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
         .split(f.size());
+
+    let v_panes = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+        .split(h_panes[1]);
 
     let style = Style::default();
     let dir_style = style.add_modifier(Modifier::BOLD);
@@ -379,7 +394,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             Constraint::Length(3),
             Constraint::Length(3),
         ]);
-    f.render_stateful_widget(table, chunks[0], &mut app.dir_list.state);
+    f.render_stateful_widget(table, h_panes[0], &mut app.dir_list.state);
 
     let events: Vec<ListItem> = app
         .events
@@ -392,8 +407,8 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .collect();
 
     let events_list = List::new(events)
-        .block(Block::default().borders(Borders::ALL).title("List"))
+        .block(Block::default().borders(Borders::ALL).title("Events"))
         .start_corner(Corner::TopLeft);
 
-    f.render_widget(events_list, chunks[1]);
+    f.render_stateful_widget(events_list, v_panes[1], &mut app.event_list_state);
 }
