@@ -6,6 +6,8 @@ use std::{
     io,
     time::{Duration, Instant},
 };
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 // at the top of your source file
 use std::os::macos::fs::MetadataExt;
@@ -25,7 +27,9 @@ use tui::{
     widgets::{Block, Borders, List, ListItem, Row, Table, TableState},
     Frame, Terminal,
 };
-use tui::widgets::ListState;
+use tui::layout::Alignment;
+use tui::text::Text;
+use tui::widgets::{ListState, Paragraph};
 use users::get_user_by_uid;
 use tree_magic_mini::from_filepath;
 
@@ -138,7 +142,8 @@ struct App {
     dir: String,
     dir_list: DirectoryList,
     events: Vec<String>,
-    event_list_state: ListState
+    event_list_state: ListState,
+    file_snippet: Vec<String>
 }
 
 impl App {
@@ -150,7 +155,8 @@ impl App {
                 items: vec![],
             },
             events: vec![],
-            event_list_state: ListState::default()
+            event_list_state: ListState::default(),
+            file_snippet: vec![]
         }
     }
 
@@ -253,8 +259,7 @@ fn run_app<B: Backend>(
                         app.add_event("Action on selected".to_string());
                         // get the selected item
                         let sel_idx = app.dir_list.state.selected().unwrap();
-                        let sel_item = &app.dir_list.items[sel_idx];
-                        match sel_item {
+                        match &app.dir_list.items[sel_idx] {
                             DirectoryListItem::String(chg_dir) => {
                                 app.navigate_to_relative_directory(chg_dir.to_owned());
                             }
@@ -263,6 +268,15 @@ fn run_app<B: Backend>(
                                    app.navigate_to_relative_directory(entry.file_name().into_string().unwrap())
                                 } else {
                                     if let Some(mime_type) = tree_magic_mini::from_filepath(&entry.path()) {
+                                        if mime_type.starts_with("text") {
+                                            app.file_snippet.clear();
+                                            let file = File::open(&entry.path()).unwrap();
+                                            let reader = BufReader::new(file);
+                                            for (index, line) in reader.lines().enumerate() {
+                                                if index > 50 { break; }
+                                                app.file_snippet.push(line.unwrap());
+                                            }
+                                        }
                                         app.add_event(format!("File type: {}", mime_type.to_string()));
                                     }
                                 }
@@ -395,6 +409,24 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             Constraint::Length(3),
         ]);
     f.render_stateful_widget(table, h_panes[0], &mut app.dir_list.state);
+
+    let snippet_block = Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default())
+        .title("Snippet");
+
+    let result: Vec<Spans> = app.file_snippet
+        .iter()
+        .map(|s| Spans::from(s.as_str()))
+        .collect();
+    let snippet_text = result;
+
+    let snippet_paragraph = Paragraph::new(snippet_text)
+        .style(Style::default())
+        .block(snippet_block)
+        .alignment(Alignment::Left);
+
+    f.render_widget(snippet_paragraph, v_panes[0]);
 
     let events: Vec<ListItem> = app
         .events
