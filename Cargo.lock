@@ -214,6 +214,7 @@ dependencies = [
  "byte-unit",
  "clap",
  "crossterm 0.26.1",
+ "pathtrim",
  "tui",
  "unix_permissions_ext",
  "users",
@@ -265,6 +266,12 @@ dependencies = [
  "smallvec",
  "windows-sys",
 ]
+
+[[package]]
+name = "pathtrim"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b008f336efe97cf9503c2e03d332e702eb3468f5afd72d70e7d611b3008f7f9"
 
 [[package]]
 name = "proc-macro-error"

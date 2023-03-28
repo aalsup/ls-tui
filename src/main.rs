@@ -130,7 +130,9 @@ impl App {
     }
 
     // Do something every so often
-    fn on_tick(&mut self) {}
+    fn on_tick(&mut self) {
+        self.dir_list.refresh(self.dir.as_str());
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
