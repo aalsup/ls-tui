@@ -5,10 +5,14 @@ use std::{
     fs::{DirEntry, File},
     io,
     io::{BufRead, BufReader},
-    os::macos::fs::MetadataExt,
     path::Path,
     time::{Duration, Instant},
 };
+#[cfg(target_os = "linux")]
+use std::os::linux::fs::MetadataExt;
+#[cfg(target_os = "macos")]
+use std::os::macos::fs::MetadataExt;
+
 // at the top of your source file
 use unix_permissions_ext::UNIXPermissionsExt;
 
@@ -24,10 +28,9 @@ use tui::{
     layout::{Alignment, Constraint, Corner, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Spans},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap},
     Frame, Terminal,
 };
-use tui::widgets::Wrap;
 use users::get_user_by_uid;
 
 const MAX_EVENTS: usize = 5;
@@ -205,7 +208,7 @@ impl App {
     }
 
     fn add_event(&mut self, event: String) {
-       while self.events.len() > MAX_EVENTS {
+       while self.events.len() >= MAX_EVENTS {
            self.events.remove(0);
        }
         self.events.push(event);
@@ -226,7 +229,7 @@ impl App {
                                 self.file_snippet.push(line.unwrap());
                             }
                         }
-                        self.add_event(format!("File type: {}", mime_type.to_string()));
+                        self.add_event(format!("File: {}, Type: {}", entry.file_name().into_string().unwrap(), mime_type.to_string()));
                     }
                 }
             },
