@@ -2,36 +2,36 @@ use std::{
     cmp::Ordering,
     error::Error,
     fs,
-    fs::DirEntry,
+    fs::{DirEntry, File},
     io,
+    io::{BufRead, BufReader},
+    os::macos::fs::MetadataExt,
+    path::Path,
     time::{Duration, Instant},
 };
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
 // at the top of your source file
-use std::os::macos::fs::MetadataExt;
 use unix_permissions_ext::UNIXPermissionsExt;
 
 use byte_unit::Byte;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use tui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Corner, Direction, Layout},
+    layout::{Alignment, Constraint, Corner, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Span, Spans},
-    widgets::{Block, Borders, List, ListItem, Row, Table, TableState},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, TableState},
     Frame, Terminal,
 };
-use tui::layout::Alignment;
-use tui::text::Text;
-use tui::widgets::{ListState, Paragraph};
+use tui::widgets::Wrap;
 use users::get_user_by_uid;
-use tree_magic_mini::from_filepath;
+
+const MAX_EVENTS: usize = 5;
+const TICK_RATE_MILLIS: u64 = 250;
+const SNIPPET_LINES: usize = 50;
 
 #[derive(Debug)]
 enum DirectoryListItem {
@@ -185,7 +185,6 @@ impl App {
                 if let Some(new_basename) = basename.strip_prefix("/") {
                     basename = new_basename.to_string();
                 }
-                self.add_event(format!("{}: {}", "select_by_name", basename));
                 self.dir_list.select_by_name(basename.as_str());
             }
         } else {
@@ -198,10 +197,33 @@ impl App {
     }
 
     fn add_event(&mut self, event: String) {
-       while self.events.len() > 5 {
+       while self.events.len() > MAX_EVENTS {
            self.events.remove(0);
        }
         self.events.push(event);
+    }
+
+    fn load_file_snippet(&mut self) {
+        self.file_snippet.clear();
+        let sel_idx = self.dir_list.state.selected().unwrap();
+        match &self.dir_list.items[sel_idx] {
+            DirectoryListItem::Entry(entry) => {
+                if !entry.file_type().unwrap().is_dir() {
+                    if let Some(mime_type) = tree_magic_mini::from_filepath(&entry.path()) {
+                        if mime_type.starts_with("text") {
+                            let file = File::open(&entry.path()).unwrap();
+                            let reader = BufReader::new(file);
+                            for (index, line) in reader.lines().enumerate() {
+                                if index > SNIPPET_LINES { break; }
+                                self.file_snippet.push(line.unwrap());
+                            }
+                        }
+                        self.add_event(format!("File type: {}", mime_type.to_string()));
+                    }
+                }
+            },
+            DirectoryListItem::String(_) => {}
+        }
     }
 }
 
@@ -214,7 +236,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     // create app and run it
-    let tick_rate = Duration::from_millis(250);
+    let tick_rate = Duration::from_millis(TICK_RATE_MILLIS);
     let app = App::new();
     let res = run_app(&mut terminal, app, tick_rate);
 
@@ -232,6 +254,39 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn handle_input(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            // get the selected item
+            let sel_idx = app.dir_list.state.selected().unwrap();
+            match &app.dir_list.items[sel_idx] {
+                DirectoryListItem::String(chg_dir) => {
+                    app.navigate_to_relative_directory(chg_dir.to_owned());
+                },
+                DirectoryListItem::Entry(entry) => {
+                    if entry.file_type().unwrap().is_dir() {
+                        app.navigate_to_relative_directory(entry.file_name().into_string().unwrap())
+                    } else {
+                        opener::open(entry.path()).ok();
+                    }
+                }
+            }
+        },
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.dir_list.select_next();
+            app.load_file_snippet();
+        },
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.dir_list.select_previous();
+            app.load_file_snippet();
+        },
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.navigate_to_parent_directory();
+        },
+        _ => {}
+    }
 }
 
 fn run_app<B: Backend>(
@@ -255,53 +310,7 @@ fn run_app<B: Backend>(
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Enter | KeyCode::Char(' ') => {
-                        app.add_event("Action on selected".to_string());
-                        // get the selected item
-                        let sel_idx = app.dir_list.state.selected().unwrap();
-                        match &app.dir_list.items[sel_idx] {
-                            DirectoryListItem::String(chg_dir) => {
-                                app.navigate_to_relative_directory(chg_dir.to_owned());
-                            }
-                            DirectoryListItem::Entry(entry) => {
-                                if entry.file_type().unwrap().is_dir() {
-                                   app.navigate_to_relative_directory(entry.file_name().into_string().unwrap())
-                                } else {
-                                    if let Some(mime_type) = tree_magic_mini::from_filepath(&entry.path()) {
-                                        if mime_type.starts_with("text") {
-                                            app.file_snippet.clear();
-                                            let file = File::open(&entry.path()).unwrap();
-                                            let reader = BufReader::new(file);
-                                            for (index, line) in reader.lines().enumerate() {
-                                                if index > 50 { break; }
-                                                app.file_snippet.push(line.unwrap());
-                                            }
-                                        }
-                                        app.add_event(format!("File type: {}", mime_type.to_string()));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        app.dir_list.select_next();
-                        app.add_event(format!(
-                            "Next => {}",
-                            app.dir_list.state.selected().unwrap()
-                        ));
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        app.dir_list.select_previous();
-                        app.add_event(format!(
-                            "Previous => {}",
-                            app.dir_list.state.selected().unwrap()
-                        ));
-                    }
-                    KeyCode::Left | KeyCode::Char('h') => {
-                        app.add_event(format!("Parent Dir"));
-                        app.navigate_to_parent_directory();
-                    }
-                    _ => {}
+                    _ => handle_input(&mut app, key)
                 }
             }
         }
@@ -337,7 +346,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                 DirectoryListItem::String(item) => {
                     let file_name = item;
                     Row::new(vec![file_name.as_str()]).style(dir_style)
-                }
+                },
                 DirectoryListItem::Entry(item) => {
                     // The item gets its own line
                     let file_name = item.file_name().into_string().unwrap();
@@ -347,7 +356,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                         style = dir_style;
                     }
                     if item.file_type().unwrap().is_symlink() {
-                        style = link_style
+                        style = link_style;
                     }
                     let mut filesize_str = "".to_string();
                     if !item.file_type().unwrap().is_dir() {
@@ -415,15 +424,21 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .style(Style::default())
         .title("Snippet");
 
-    let result: Vec<Spans> = app.file_snippet
+    let snippet_text: Vec<Spans> = app.file_snippet
         .iter()
         .map(|s| Spans::from(s.as_str()))
         .collect();
-    let snippet_text = result;
+
+    // wrap single-lined files
+    let mut snippet_wrap = Wrap { trim: false };
+    if snippet_text.len() <= 1 {
+        snippet_wrap = Wrap { trim: true };
+    }
 
     let snippet_paragraph = Paragraph::new(snippet_text)
         .style(Style::default())
         .block(snippet_block)
+        .wrap(snippet_wrap)
         .alignment(Alignment::Left);
 
     f.render_widget(snippet_paragraph, v_panes[0]);
