@@ -13,6 +13,7 @@ use std::{
 use unix_permissions_ext::UNIXPermissionsExt;
 
 use byte_unit::Byte;
+use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent},
     execute,
@@ -32,6 +33,13 @@ use users::get_user_by_uid;
 const MAX_EVENTS: usize = 5;
 const TICK_RATE_MILLIS: u64 = 250;
 const SNIPPET_LINES: usize = 50;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[clap(index = 1)]
+    dir_name: Option<String>,
+}
 
 #[derive(Debug)]
 enum DirectoryListItem {
@@ -147,9 +155,9 @@ struct App {
 }
 
 impl App {
-    fn new() -> App {
+    fn new(dir_name: String) -> App {
         App {
-            dir: ".".to_string(),
+            dir: dir_name,
             dir_list: DirectoryList {
                 state: TableState::default(),
                 items: vec![],
@@ -228,6 +236,11 @@ impl App {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let mut args = Args::parse();
+    if let None = args.dir_name {
+        args.dir_name = Some(".".to_string());
+    }
+
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -237,7 +250,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // create app and run it
     let tick_rate = Duration::from_millis(TICK_RATE_MILLIS);
-    let app = App::new();
+    let app = App::new(args.dir_name.unwrap());
     let res = run_app(&mut terminal, app, tick_rate);
 
     // restore terminal
@@ -297,7 +310,6 @@ fn run_app<B: Backend>(
     let mut last_tick = Instant::now();
 
     // read the directory contents
-    app.dir = ".".to_string();
     app.dir_list.refresh(app.dir.as_str());
 
     loop {
