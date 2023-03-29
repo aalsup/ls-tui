@@ -1,6 +1,7 @@
 [package]
 name = "ls-tui"
 version = "0.1.0"
+authors = ["Andrew Alsup"]
 edition = "2021"
 
 [[bin]]
