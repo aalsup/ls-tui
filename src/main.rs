@@ -22,6 +22,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use thiserror::Error;
 use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Corner, Direction, Layout},
@@ -35,6 +36,12 @@ use users::get_user_by_uid;
 const MAX_EVENTS: usize = 5;
 const TICK_RATE_MILLIS: u64 = 250;
 const SNIPPET_LINES: usize = 50;
+
+#[derive(Error, Debug)]
+pub enum AppError {
+    #[error("unable to access directory")]
+    DirListError(#[from] io::Error),
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -59,11 +66,10 @@ struct DirectoryList {
 }
 
 impl DirectoryList {
-    fn refresh(&mut self, dir: &str) {
+    fn refresh(&mut self, dir: &str) -> Result<(), io::Error>{
         self.items.clear();
         // read all the items in the directory
-        self.items = fs::read_dir(dir)
-            .unwrap()
+        self.items = fs::read_dir(dir)?
             .into_iter()
             .map(|x| x.unwrap())
             .map(|x| DirectoryListItem::Entry(x))
@@ -76,6 +82,8 @@ impl DirectoryList {
         if self.state.selected() == None {
             self.state.select(Some(0));
         }
+
+        Ok(())
     }
 
     fn compare_dir_items(a: &DirectoryListItem, b: &DirectoryListItem) -> Ordering {
@@ -105,10 +113,13 @@ impl DirectoryList {
         for (i, x) in self.items.iter().enumerate() {
             match x {
                 DirectoryListItem::Entry(entry) => {
-                   if name.eq(entry.file_name().into_string().unwrap().as_str()) {
-                       self.state.select(Some(i));
-                       break;
-                   }
+                    let fname = entry.file_name()
+                        .into_string()
+                        .unwrap_or("".to_string());
+                    if name.eq(fname.as_str()) {
+                        self.state.select(Some(i));
+                        break;
+                    }
                 }
                 _ => {}
             }
@@ -176,7 +187,7 @@ impl App {
         self.dir_list.refresh(self.dir.as_str());
     }
 
-    fn navigate_to_relative_directory(&mut self, chg_dir: String) {
+    fn navigate_to_relative_directory(&mut self, chg_dir: String) -> Result<(), AppError> {
         // save the current info
         let cur_path_str = &self.dir.clone();
         let cur_path = Path::new(cur_path_str);
@@ -184,7 +195,7 @@ impl App {
 
         // update the current info
         self.dir = chg_path.to_str().unwrap().to_string();
-        self.dir_list.refresh(&self.dir);
+        self.dir_list.refresh(&self.dir)?;
 
         let cur_path_str = cur_path.to_str().unwrap().to_string();
         let chg_path_str = chg_path.to_str().unwrap().to_string();
@@ -200,40 +211,49 @@ impl App {
         } else {
             self.dir_list.state.select(Some(0));
         }
+
+        Ok(())
     }
 
-    fn navigate_to_parent_directory(&mut self) {
-       self.navigate_to_relative_directory("..".to_string());
+    fn navigate_to_parent_directory(&mut self) -> Result<(), AppError>{
+        self.navigate_to_relative_directory("..".to_string())?;
+
+        Ok(())
     }
 
     fn add_event(&mut self, event: String) {
-       while self.events.len() >= MAX_EVENTS {
-           self.events.remove(0);
-       }
+        while self.events.len() >= MAX_EVENTS {
+            self.events.remove(0);
+        }
         self.events.push(event);
     }
 
-    fn load_file_snippet(&mut self) {
+    fn load_file_snippet(&mut self) -> Result<(), io::Error>{
         self.file_snippet.clear();
-        let sel_idx = self.dir_list.state.selected().unwrap();
-        match &self.dir_list.items[sel_idx] {
-            DirectoryListItem::Entry(entry) => {
-                if !entry.file_type().unwrap().is_dir() {
-                    if let Some(mime_type) = tree_magic_mini::from_filepath(&entry.path()) {
-                        if mime_type.starts_with("text") {
-                            let file = File::open(&entry.path()).unwrap();
-                            let reader = BufReader::new(file);
-                            for (index, line) in reader.lines().enumerate() {
-                                if index > SNIPPET_LINES { break; }
-                                self.file_snippet.push(line.unwrap());
+        if let Some(sel_idx) = self.dir_list.state.selected() {
+            match &self.dir_list.items[sel_idx] {
+                DirectoryListItem::Entry(entry) => {
+                    if !entry.file_type().unwrap().is_dir() {
+                        if let Some(mime_type) = tree_magic_mini::from_filepath(&entry.path()) {
+                            if mime_type.starts_with("text") {
+                                let file = File::open(&entry.path())?;
+                                let reader = BufReader::new(file);
+                                for (index, line) in reader.lines().enumerate() {
+                                    if index > SNIPPET_LINES { break; }
+                                    self.file_snippet.push(line.unwrap());
+                                }
                             }
+                            self.add_event(format!("File: {}, Type: {}",
+                                                   entry.file_name().into_string().unwrap_or("?".to_string()),
+                                                   mime_type.to_string()));
                         }
-                        self.add_event(format!("File: {}, Type: {}", entry.file_name().into_string().unwrap(), mime_type.to_string()));
                     }
-                }
-            },
-            DirectoryListItem::String(_) => {}
+                },
+                DirectoryListItem::String(_) => {}
+            }
         }
+
+        Ok(())
     }
 }
 
@@ -265,7 +285,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        println!("{:?}", err)
+        println!("{:?}", err);
     }
 
     Ok(())
@@ -282,7 +302,7 @@ fn handle_input(app: &mut App, key: KeyEvent) {
                 },
                 DirectoryListItem::Entry(entry) => {
                     if entry.file_type().unwrap().is_dir() {
-                        app.navigate_to_relative_directory(entry.file_name().into_string().unwrap())
+                        app.navigate_to_relative_directory(entry.file_name().into_string().unwrap());
                     } else {
                         opener::open(entry.path()).ok();
                     }
@@ -312,7 +332,7 @@ fn run_app<B: Backend>(
     let mut last_tick = Instant::now();
 
     // read the directory contents
-    app.dir_list.refresh(app.dir.as_str());
+    app.dir_list.refresh(app.dir.as_str())?;
 
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
