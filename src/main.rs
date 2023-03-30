@@ -257,6 +257,11 @@ impl App {
     }
 }
 
+enum KeyInputResult {
+    Continue,
+    Stop
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = Args::parse();
     if let None = args.dir_name {
@@ -291,8 +296,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn handle_input(app: &mut App, key: KeyEvent) {
+fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
     match key.code {
+        KeyCode::Char('q') => {
+            return KeyInputResult::Stop;
+        },
         KeyCode::Enter | KeyCode::Char(' ') => {
             // get the selected item
             if let Some(sel_idx) = app.dir_list.state.selected() {
@@ -323,6 +331,8 @@ fn handle_input(app: &mut App, key: KeyEvent) {
         },
         _ => {}
     }
+
+    return KeyInputResult::Continue;
 }
 
 fn run_app<B: Backend>(
@@ -343,9 +353,11 @@ fn run_app<B: Backend>(
             .unwrap_or_else(|| Duration::from_secs(0));
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => return Ok(()),
-                    _ => handle_input(&mut app, key)
+                match handle_input(&mut app, key) {
+                    KeyInputResult::Stop => {
+                        return Ok(());
+                    },
+                    _ => {}
                 }
             }
         }
