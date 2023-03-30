@@ -184,7 +184,7 @@ impl App {
     // Do something every so often
     fn on_tick(&mut self) {
         self.dir = Path::new(self.dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
-        self.dir_list.refresh(self.dir.as_str());
+        self.dir_list.refresh(self.dir.as_str()).ok();
     }
 
     fn navigate_to_relative_directory(&mut self, chg_dir: String) -> Result<(), AppError> {
@@ -295,30 +295,31 @@ fn handle_input(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Enter | KeyCode::Char(' ') => {
             // get the selected item
-            let sel_idx = app.dir_list.state.selected().unwrap();
-            match &app.dir_list.items[sel_idx] {
-                DirectoryListItem::String(chg_dir) => {
-                    app.navigate_to_relative_directory(chg_dir.to_owned());
-                },
-                DirectoryListItem::Entry(entry) => {
-                    if entry.file_type().unwrap().is_dir() {
-                        app.navigate_to_relative_directory(entry.file_name().into_string().unwrap());
-                    } else {
-                        opener::open(entry.path()).ok();
+            if let Some(sel_idx) = app.dir_list.state.selected() {
+                match &app.dir_list.items[sel_idx] {
+                    DirectoryListItem::String(chg_dir) => {
+                        app.navigate_to_relative_directory(chg_dir.to_owned()).ok();
+                    },
+                    DirectoryListItem::Entry(entry) => {
+                        if entry.file_type().unwrap().is_dir() {
+                            app.navigate_to_relative_directory(entry.file_name().into_string().unwrap()).ok();
+                        } else {
+                            opener::open(entry.path()).ok();
+                        }
                     }
                 }
             }
         },
         KeyCode::Down | KeyCode::Char('j') => {
             app.dir_list.select_next();
-            app.load_file_snippet();
+            app.load_file_snippet().ok();
         },
         KeyCode::Up | KeyCode::Char('k') => {
             app.dir_list.select_previous();
-            app.load_file_snippet();
+            app.load_file_snippet().ok();
         },
         KeyCode::Left | KeyCode::Char('h') => {
-            app.navigate_to_parent_directory();
+            app.navigate_to_parent_directory().ok();
         },
         _ => {}
     }
