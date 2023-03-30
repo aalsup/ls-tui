@@ -13,7 +13,6 @@ use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt;
 
-// at the top of your source file
 use unix_permissions_ext::UNIXPermissionsExt;
 
 use byte_unit::Byte;
