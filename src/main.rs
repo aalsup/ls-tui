@@ -227,12 +227,14 @@ impl App {
         Ok(())
     }
 
+    /// Move to the parent of the current directory.
     fn navigate_to_parent_directory(&mut self) -> Result<(), AppError>{
         self.navigate_to_relative_directory("..".to_string())?;
 
         Ok(())
     }
 
+    /// Add an event to the event list. Only MAX_EVENTS are stored/displayed.
     fn add_event(&mut self, event: String) {
         while self.events.len() >= MAX_EVENTS {
             self.events.remove(0);
@@ -240,6 +242,7 @@ impl App {
         self.events.push(event);
     }
 
+    /// Load a snippet of the selected file into the snippet view.
     fn load_file_snippet(&mut self) -> Result<(), io::Error>{
         self.file_snippet.clear();
         if let Some(sel_idx) = self.dir_list.state.selected() {
