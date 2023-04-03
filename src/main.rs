@@ -86,6 +86,11 @@ impl DirectoryList {
         Ok(())
     }
 
+    /// Here are the rules for sorting DirectoryListItems:
+    ///     Entry > String
+    ///     Entry.dir > (Entry.file | Entry.symlink)
+    ///     if (String, String) => sort normally
+    ///     if (Entry, Entry) => sort normally on file_name
     fn compare_dir_items(a: &DirectoryListItem, b: &DirectoryListItem) -> Ordering {
         match (a, b) {
             (DirectoryListItem::String(a_str), DirectoryListItem::String(b_str)) => {
@@ -108,6 +113,8 @@ impl DirectoryList {
         }
     }
 
+    /// Select the first DirectoryListItem with the given name.
+    /// If none exists, nothing will be selected.
     fn select_by_name(&mut self, name: &str) {
         self.unselect();
         for (i, x) in self.items.iter().enumerate() {
@@ -126,6 +133,7 @@ impl DirectoryList {
         }
     }
 
+    /// Select the next item in the list, without wrapping.
     fn select_next(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
@@ -140,6 +148,7 @@ impl DirectoryList {
         self.state.select(Some(i));
     }
 
+    /// Select the previous item in the list, without wrapping.
     fn select_previous(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
@@ -154,6 +163,7 @@ impl DirectoryList {
         self.state.select(Some(i));
     }
 
+    /// Unselect any previously selected item in the list.
     fn unselect(&mut self) {
         self.state.select(None);
     }
@@ -181,16 +191,18 @@ impl App {
         }
     }
 
-    // Do something every so often
+    /// Do something every so often
     fn on_tick(&mut self) {
         self.dir = Path::new(self.dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
         self.dir_list.refresh(self.dir.as_str()).ok();
     }
 
+    /// Move to a new directory -- relative paths are ok, absolute paths are ok.
     fn navigate_to_relative_directory(&mut self, chg_dir: String) -> Result<(), AppError> {
         // save the current info
         let cur_path_str = &self.dir.clone();
         let cur_path = Path::new(cur_path_str);
+
         let chg_path = cur_path.join(chg_dir).canonicalize()?;
 
         // update the current info
