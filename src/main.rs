@@ -191,7 +191,7 @@ impl App {
         // save the current info
         let cur_path_str = &self.dir.clone();
         let cur_path = Path::new(cur_path_str);
-        let chg_path = cur_path.join(chg_dir).canonicalize().unwrap();
+        let chg_path = cur_path.join(chg_dir).canonicalize()?;
 
         // update the current info
         self.dir = chg_path.to_str().unwrap().to_string();
@@ -415,12 +415,10 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                     }
                     let meta = item.metadata().unwrap();
                     let uid = meta.st_uid();
-                    let user: String = get_user_by_uid(uid)
-                        .unwrap()
-                        .name()
-                        .to_os_string()
-                        .into_string()
-                        .unwrap();
+                    let mut user = uid.to_string();
+                    if let Some(uname) = get_user_by_uid(uid) {
+                        user = uname.name().to_os_string().into_string().unwrap();
+                    }
                     let gid = meta.st_gid().to_string();
                     let perms = meta.permissions();
                     let perms_str = perms.stringify();
@@ -456,13 +454,13 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                 .borders(Borders::ALL),
         )
         .widths(&[
-            Constraint::Length(20),
-            Constraint::Length(10),
-            Constraint::Length(12),
-            Constraint::Length(12),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(3),
+            Constraint::Length(20),     // name
+            Constraint::Length(10),     // size
+            Constraint::Length(12),     // user
+            Constraint::Length(5),      // group
+            Constraint::Length(3),      // usr (mask)
+            Constraint::Length(3),      // grp (mask)
+            Constraint::Length(3),      // oth (mask)
         ]);
     f.render_stateful_widget(table, h_panes[0], &mut app.dir_list.state);
 
