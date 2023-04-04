@@ -519,3 +519,34 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
 
     f.render_stateful_widget(events_list, v_panes[1], &mut app.event_list_state);
 }
+
+#[cfg(test)]
+mod tests {
+    // Note this useful idiom: importing names from outer (for mod tests) scope.
+    use super::*;
+
+    #[test]
+    fn test_navigate_to_relative_directory() {
+        let mut app = App::new("/".to_string());
+        app.navigate_to_relative_directory("tmp".to_string()).unwrap();
+        println!("relative dir: {}", app.dir);
+        assert_eq!("/tmp".to_string(), app.dir);
+    }
+
+    #[test]
+    fn test_navigate_to_parent_directory() {
+        let mut app = App::new("/tmp".to_string());
+        app.navigate_to_parent_directory().unwrap();
+        println!("parent dir: {}", app.dir);
+        assert_eq!("/".to_string(), app.dir);
+    }
+
+    #[test]
+    fn test_navigate_to_absolute_directory() {
+        let mut app = App::new(".".to_string());
+        app.navigate_to_relative_directory("/tmp".to_string()).unwrap();
+        println!("absolute dir: {}", app.dir);
+        assert_eq!("/tmp".to_string(), app.dir);
+    }
+
+}
