@@ -25,7 +25,7 @@ use crossterm::{
 use thiserror::Error;
 use tui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Corner, Direction, Layout},
+    layout::{Alignment, Constraint, Corner, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Span, Spans},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap},
@@ -50,10 +50,22 @@ struct Args {
     dir_name: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+enum SortBy {
+    TypeNameAsc,
+    TypeNameDec,
+    NameAsc,
+    NameDec,
+    DateTimeAsc,
+    DateTimeDec,
+    SizeAsc,
+    SizeDec,
+}
+
 #[derive(Debug)]
 enum DirectoryListItem {
     Entry(DirEntry),
-    String(String),
+    ParentDir(String),
 }
 
 /// This struct holds the current state of the app. In particular, it has the `items` field which is a wrapper
@@ -66,7 +78,7 @@ struct DirectoryList {
 }
 
 impl DirectoryList {
-    fn refresh(&mut self, dir: &str) -> Result<(), io::Error>{
+    fn refresh(&mut self, dir: &str, sort_by: SortBy) -> Result<(), io::Error>{
         self.items.clear();
         // read all the items in the directory
         self.items = fs::read_dir(dir)?
@@ -75,9 +87,9 @@ impl DirectoryList {
             .map(|x| DirectoryListItem::Entry(x))
             .collect();
         self.items
-            .insert(0, DirectoryListItem::String("..".to_string()));
+            .insert(0, DirectoryListItem::ParentDir("..".to_string()));
         self.items
-            .sort_by(|a, b| DirectoryList::compare_dir_items(a, b));
+            .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, sort_by.clone()));
 
         if self.state.selected() == None {
             self.state.select(Some(0));
@@ -86,28 +98,45 @@ impl DirectoryList {
         Ok(())
     }
 
-    /// Here are the rules for sorting DirectoryListItems:
-    ///     Entry > String
-    ///     Entry.dir > (Entry.file | Entry.symlink)
-    ///     if (String, String) => sort normally
-    ///     if (Entry, Entry) => sort normally on file_name
-    fn compare_dir_items(a: &DirectoryListItem, b: &DirectoryListItem) -> Ordering {
+    /// Sort the DirectoryListItems based on the `sort_by` parameter.
+    fn compare_dir_items(a: &DirectoryListItem, b: &DirectoryListItem, sort_by: SortBy) -> Ordering {
         match (a, b) {
-            (DirectoryListItem::String(a_str), DirectoryListItem::String(b_str)) => {
+            (DirectoryListItem::ParentDir(a_str), DirectoryListItem::ParentDir(b_str)) => {
                 a_str.cmp(b_str)
             }
-            (DirectoryListItem::String(_), DirectoryListItem::Entry(_)) => Ordering::Less,
-            (DirectoryListItem::Entry(_), DirectoryListItem::String(_)) => Ordering::Greater,
+            (DirectoryListItem::ParentDir(_), DirectoryListItem::Entry(_)) => Ordering::Less,
+            (DirectoryListItem::Entry(_), DirectoryListItem::ParentDir(_)) => Ordering::Greater,
             (DirectoryListItem::Entry(a), DirectoryListItem::Entry(b)) => {
-                let a_file_type = a.file_type().unwrap();
-                let b_file_type = b.file_type().unwrap();
-
-                return if a_file_type.is_dir() && !b_file_type.is_dir() {
-                    Ordering::Less
-                } else if !a_file_type.is_dir() && b_file_type.is_dir() {
-                    Ordering::Greater
-                } else {
-                    a.file_name().cmp(&b.file_name())
+                let retval = match sort_by {
+                    SortBy::TypeNameAsc | SortBy::TypeNameDec => {
+                        if a.file_type().unwrap().is_dir() && !b.file_type().unwrap().is_dir() {
+                            Ordering::Less
+                        } else if !a.file_type().unwrap().is_dir() && b.file_type().unwrap().is_dir() {
+                            Ordering::Greater
+                        } else {
+                            a.file_name().cmp(&b.file_name())
+                        }
+                    },
+                    SortBy::SizeAsc | SortBy::SizeDec => {
+                        if a.metadata().unwrap().len() < b.metadata().unwrap().len() {
+                            Ordering::Less
+                        } else if a.metadata().unwrap().len() > b.metadata().unwrap().len() {
+                            Ordering::Greater
+                        } else {
+                            Ordering::Equal
+                        }
+                    },
+                    SortBy::NameAsc | SortBy::NameDec => {
+                        a.file_name().cmp(&b.file_name())
+                    },
+                    SortBy::DateTimeAsc | SortBy::DateTimeDec => {
+                        a.metadata().unwrap().modified().unwrap().cmp(&b.metadata().unwrap().modified().unwrap())
+                    }
+                };
+                // reverse the order?
+                return match sort_by {
+                    SortBy::TypeNameDec | SortBy::DateTimeDec | SortBy::NameDec | SortBy::SizeDec => Ordering::reverse(retval),
+                    _ => retval
                 };
             }
         }
@@ -174,7 +203,9 @@ struct App {
     dir_list: DirectoryList,
     events: Vec<String>,
     event_list_state: ListState,
-    file_snippet: Vec<String>
+    file_snippet: Vec<String>,
+    sort_by: SortBy,
+    sort_popup: bool,
 }
 
 impl App {
@@ -187,14 +218,16 @@ impl App {
             },
             events: vec![],
             event_list_state: ListState::default(),
-            file_snippet: vec![]
+            file_snippet: vec![],
+            sort_by: SortBy::TypeNameAsc,
+            sort_popup: false,
         }
     }
 
     /// Do something every so often
     fn on_tick(&mut self) {
         self.dir = Path::new(self.dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
-        self.dir_list.refresh(self.dir.as_str()).ok();
+        self.dir_list.refresh(self.dir.as_str(), self.sort_by.clone()).ok();
     }
 
     /// Move to a new directory -- relative paths are ok, absolute paths are ok.
@@ -207,7 +240,7 @@ impl App {
 
         // update the current info
         self.dir = chg_path.to_str().unwrap().to_string();
-        self.dir_list.refresh(&self.dir)?;
+        self.dir_list.refresh(&self.dir, self.sort_by.clone())?;
 
         let cur_path_str = cur_path.to_str().unwrap().to_string();
         let chg_path_str = chg_path.to_str().unwrap().to_string();
@@ -264,7 +297,7 @@ impl App {
                         }
                     }
                 },
-                DirectoryListItem::String(_) => {}
+                DirectoryListItem::ParentDir(_) => {}
             }
         }
 
@@ -317,7 +350,7 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
             // get the selected item
             if let Some(sel_idx) = app.dir_list.state.selected() {
                 match &app.dir_list.items[sel_idx] {
-                    DirectoryListItem::String(chg_dir) => {
+                    DirectoryListItem::ParentDir(chg_dir) => {
                         app.navigate_to_relative_directory(chg_dir.to_owned()).ok();
                     },
                     DirectoryListItem::Entry(entry) => {
@@ -355,7 +388,7 @@ fn run_app<B: Backend>(
     let mut last_tick = Instant::now();
 
     // read the directory contents
-    app.dir_list.refresh(app.dir.as_str())?;
+    app.dir_list.refresh(app.dir.as_str(), app.sort_by.clone())?;
 
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
@@ -402,7 +435,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .iter()
         .map(|item| {
             match item {
-                DirectoryListItem::String(item) => {
+                DirectoryListItem::ParentDir(item) => {
                     let file_name = item;
                     Row::new(vec![file_name.as_str()]).style(dir_style)
                 },
@@ -515,6 +548,40 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .start_corner(Corner::TopLeft);
 
     f.render_stateful_widget(events_list, v_panes[1], &mut app.event_list_state);
+
+    if app.sort_popup {
+        let block = Block::default().title("Sort By").borders(Borders::ALL);
+        let area = centered_rect(60, 20, f.size());
+        f.render_widget(tui::widgets::Clear, area);
+        f.render_widget(block, area);
+    }
+}
+
+/// helper function to create a centered rect using up certain percentage of the available rect `r`
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_y) / 2),
+                Constraint::Percentage(percent_y),
+                Constraint::Percentage((100 - percent_y) / 2),
+            ]
+                .as_ref(),
+        )
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_x) / 2),
+                Constraint::Percentage(percent_x),
+                Constraint::Percentage((100 - percent_x) / 2),
+            ]
+                .as_ref(),
+        )
+        .split(popup_layout[1])[1]
 }
 
 #[cfg(test)]
