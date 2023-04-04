@@ -278,10 +278,7 @@ enum KeyInputResult {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut args = Args::parse();
-    if let None = args.dir_name {
-        args.dir_name = Some(".".to_string());
-    }
+    let args = Args::parse();
 
     // setup terminal
     enable_raw_mode()?;
@@ -292,7 +289,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // create app and run it
     let tick_rate = Duration::from_millis(TICK_RATE_MILLIS);
-    let app = App::new(args.dir_name.unwrap());
+    let app = App::new(args.dir_name.unwrap_or(".".to_string()));
     let res = run_app(&mut terminal, app, tick_rate);
 
     // restore terminal
