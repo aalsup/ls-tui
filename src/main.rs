@@ -1,13 +1,4 @@
-use std::{
-    cmp::Ordering,
-    error::Error,
-    fs,
-    fs::{DirEntry, File},
-    io,
-    io::{BufRead, BufReader},
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, time::{Duration, Instant}};
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
@@ -24,6 +15,7 @@ use crossterm::{
 };
 use thiserror::Error;
 use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Corner, Direction, Layout, Rect},
@@ -52,15 +44,31 @@ struct Args {
 }
 
 #[derive(Debug, Clone)]
+enum SortByDirection {
+    Asc,
+    Dec,
+}
+
+impl Default for SortByDirection {
+    fn default() -> Self {
+        SortByDirection::Asc
+    }
+}
+
+#[derive(Debug, Clone, EnumIter)]
 enum SortBy {
-    TypeNameAsc,
-    TypeNameDec,
-    NameAsc,
-    NameDec,
-    DateTimeAsc,
-    DateTimeDec,
-    SizeAsc,
-    SizeDec,
+    TypeName(SortByDirection),
+    Name(SortByDirection),
+    DateTime(SortByDirection),
+    Size(SortByDirection),
+}
+
+impl fmt::Display for SortBy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+        // or, alternatively:
+        // fmt::Debug::fmt(self, f)
+    }
 }
 
 #[derive(Debug)]
@@ -79,7 +87,7 @@ struct DirectoryList {
 }
 
 impl DirectoryList {
-    fn refresh(&mut self, dir: &str, sort_by: SortBy) -> Result<(), io::Error>{
+    fn refresh(&mut self, dir: &str, sort_by: SortBy) -> Result<(), io::Error> {
         self.items.clear();
         // read all the items in the directory
         self.items = fs::read_dir(dir)?
@@ -108,8 +116,10 @@ impl DirectoryList {
             (DirectoryListItem::ParentDir(_), DirectoryListItem::Entry(_)) => Ordering::Less,
             (DirectoryListItem::Entry(_), DirectoryListItem::ParentDir(_)) => Ordering::Greater,
             (DirectoryListItem::Entry(a), DirectoryListItem::Entry(b)) => {
-                let retval = match sort_by {
-                    SortBy::TypeNameAsc | SortBy::TypeNameDec => {
+                let mut sort_by_direction = SortByDirection::default();
+                let mut retval = match sort_by {
+                    SortBy::TypeName(direction) => {
+                        sort_by_direction = direction;
                         if a.file_type().unwrap().is_dir() && !b.file_type().unwrap().is_dir() {
                             Ordering::Less
                         } else if !a.file_type().unwrap().is_dir() && b.file_type().unwrap().is_dir() {
@@ -117,8 +127,9 @@ impl DirectoryList {
                         } else {
                             a.file_name().cmp(&b.file_name())
                         }
-                    },
-                    SortBy::SizeAsc | SortBy::SizeDec => {
+                    }
+                    SortBy::Size(direction) => {
+                        sort_by_direction = direction;
                         if a.metadata().unwrap().len() < b.metadata().unwrap().len() {
                             Ordering::Less
                         } else if a.metadata().unwrap().len() > b.metadata().unwrap().len() {
@@ -126,19 +137,22 @@ impl DirectoryList {
                         } else {
                             Ordering::Equal
                         }
-                    },
-                    SortBy::NameAsc | SortBy::NameDec => {
+                    }
+                    SortBy::Name(direction) => {
+                        sort_by_direction = direction;
                         a.file_name().cmp(&b.file_name())
-                    },
-                    SortBy::DateTimeAsc | SortBy::DateTimeDec => {
+                    }
+                    SortBy::DateTime(direction) => {
+                        sort_by_direction = direction;
                         a.metadata().unwrap().modified().unwrap().cmp(&b.metadata().unwrap().modified().unwrap())
                     }
                 };
                 // reverse the order?
-                return match sort_by {
-                    SortBy::TypeNameDec | SortBy::DateTimeDec | SortBy::NameDec | SortBy::SizeDec => Ordering::reverse(retval),
-                    _ => retval
-                };
+                match sort_by_direction {
+                    SortByDirection::Asc => {},
+                    SortByDirection::Dec => retval = retval.reverse(),
+                }
+                retval
             }
         }
     }
@@ -220,7 +234,7 @@ impl App {
             events: vec![],
             event_list_state: ListState::default(),
             file_snippet: vec![],
-            sort_by: SortBy::TypeNameAsc,
+            sort_by: SortBy::TypeName(SortByDirection::Asc),
             sort_popup: false,
         }
     }
@@ -262,7 +276,7 @@ impl App {
     }
 
     /// Move to the parent of the current directory.
-    fn navigate_to_parent_directory(&mut self) -> Result<(), AppError>{
+    fn navigate_to_parent_directory(&mut self) -> Result<(), AppError> {
         self.navigate_to_relative_directory("..".to_string())?;
 
         Ok(())
@@ -277,7 +291,7 @@ impl App {
     }
 
     /// Load a snippet of the selected file into the snippet view.
-    fn load_file_snippet(&mut self) -> Result<(), io::Error>{
+    fn load_file_snippet(&mut self) -> Result<(), io::Error> {
         self.file_snippet.clear();
         if let Some(sel_idx) = self.dir_list.state.selected() {
             match &self.dir_list.items[sel_idx] {
@@ -297,7 +311,7 @@ impl App {
                                                    mime_type.to_string()));
                         }
                     }
-                },
+                }
                 DirectoryListItem::ParentDir(_) => {}
             }
         }
@@ -308,7 +322,7 @@ impl App {
 
 enum KeyInputResult {
     Continue,
-    Stop
+    Stop,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -346,14 +360,14 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
     match key.code {
         KeyCode::Char('q') => {
             return KeyInputResult::Stop;
-        },
+        }
         KeyCode::Enter | KeyCode::Char(' ') => {
             // get the selected item
             if let Some(sel_idx) = app.dir_list.state.selected() {
                 match &app.dir_list.items[sel_idx] {
                     DirectoryListItem::ParentDir(chg_dir) => {
                         app.navigate_to_relative_directory(chg_dir.to_owned()).ok();
-                    },
+                    }
                     DirectoryListItem::Entry(entry) => {
                         if entry.file_type().unwrap().is_dir() {
                             app.navigate_to_relative_directory(entry.file_name().into_string().unwrap()).ok();
@@ -363,21 +377,21 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
                     }
                 }
             }
-        },
+        }
         KeyCode::Down | KeyCode::Char('j') => {
             app.dir_list.select_next();
             app.load_file_snippet().ok();
-        },
+        }
         KeyCode::Up | KeyCode::Char('k') => {
             app.dir_list.select_previous();
             app.load_file_snippet().ok();
-        },
+        }
         KeyCode::Left | KeyCode::Char('h') => {
             app.navigate_to_parent_directory().ok();
-        },
+        }
         KeyCode::Char('s') => {
             app.sort_popup = !app.sort_popup;
-        },
+        }
         _ => {}
     }
 
@@ -405,7 +419,7 @@ fn run_app<B: Backend>(
                 match handle_input(&mut app, key) {
                     KeyInputResult::Stop => {
                         return Ok(());
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -442,7 +456,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                 DirectoryListItem::ParentDir(item) => {
                     let file_name = item;
                     Row::new(vec![file_name.as_str()]).style(dir_style)
-                },
+                }
                 DirectoryListItem::Entry(item) => {
                     // The item gets its own line
                     let file_name = item.file_name().into_string().unwrap();
@@ -484,7 +498,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                         group_perms,
                         other_perms,
                     ])
-                    .style(style)
+                        .style(style)
                 }
             }
         })
@@ -554,10 +568,13 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     f.render_stateful_widget(events_list, v_panes[1], &mut app.event_list_state);
 
     if app.sort_popup {
-        let mut sort_by_items: Vec<ListItem> = vec![];
-        sort_by_items.push(ListItem::new(vec![
-            Spans::from(vec![Span::raw("Type/Name (asc)")])
-        ]));
+        let mut sort_by_items: Vec<ListItem> = SortBy::iter()
+            .map(|sort_by| {
+                let span = Spans::from(vec![Span::raw(sort_by.to_string())]);
+
+                ListItem::new(vec![span])
+            })
+            .collect();
         let sort_by_list = List::new(sort_by_items)
             .block(Block::default().title("Sort By").borders(Borders::ALL));
         let block = Block::default().title("Sort By").borders(Borders::ALL);
@@ -622,5 +639,4 @@ mod tests {
         println!("absolute dir: {}", app.dir);
         assert_eq!("/tmp".to_string(), app.dir);
     }
-
 }
