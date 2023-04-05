@@ -23,6 +23,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use thiserror::Error;
+use strum::IntoEnumIterator;
 use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Corner, Direction, Layout, Rect},
@@ -374,6 +375,9 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
         KeyCode::Left | KeyCode::Char('h') => {
             app.navigate_to_parent_directory().ok();
         },
+        KeyCode::Char('s') => {
+            app.sort_popup = !app.sort_popup;
+        },
         _ => {}
     }
 
@@ -550,10 +554,16 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     f.render_stateful_widget(events_list, v_panes[1], &mut app.event_list_state);
 
     if app.sort_popup {
+        let mut sort_by_items: Vec<ListItem> = vec![];
+        sort_by_items.push(ListItem::new(vec![
+            Spans::from(vec![Span::raw("Type/Name (asc)")])
+        ]));
+        let sort_by_list = List::new(sort_by_items)
+            .block(Block::default().title("Sort By").borders(Borders::ALL));
         let block = Block::default().title("Sort By").borders(Borders::ALL);
         let area = centered_rect(60, 20, f.size());
         f.render_widget(tui::widgets::Clear, area);
-        f.render_widget(block, area);
+        f.render_widget(sort_by_list, area);
     }
 }
 
