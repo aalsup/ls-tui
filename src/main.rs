@@ -14,7 +14,6 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use thiserror::Error;
-use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use tui::{
     backend::{Backend, CrosstermBackend},
@@ -80,7 +79,7 @@ impl SortBy {
 
 impl fmt::Display for SortBy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut output: String = match self {
+        let output: String = match self {
             SortBy::TypeName(SortByDirection::Asc) => "TypeName (ASC)".to_string(),
             SortBy::TypeName(SortByDirection::Dec) => "TypeName (DEC)".to_string(),
             SortBy::DateTime(SortByDirection::Asc) => "DateTime (ASC)".to_string(),
@@ -243,6 +242,7 @@ struct App {
     event_list_state: ListState,
     file_snippet: Vec<String>,
     sort_by: SortBy,
+    sort_by_list_state: ListState,
     sort_popup: bool,
 }
 
@@ -258,6 +258,7 @@ impl App {
             event_list_state: ListState::default(),
             file_snippet: vec![],
             sort_by: SortBy::TypeName(SortByDirection::Asc),
+            sort_by_list_state: ListState::default(),
             sort_popup: false,
         }
     }
@@ -379,7 +380,45 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
+   match key.code {
+       KeyCode::Char('q') => {
+           app.sort_popup = false;
+       },
+       KeyCode::Enter | KeyCode::Char(' ') => {
+           app.sort_by = SortBy::all()[app.sort_by_list_state.selected().unwrap()].clone();
+           app.sort_popup = false;
+       },
+       KeyCode::Down | KeyCode::Char('j') => {
+           if let Some(mut selected_idx) = app.sort_by_list_state.selected() {
+               selected_idx = selected_idx + 1;
+               if selected_idx < SortBy::all().len() {
+                   app.sort_by_list_state.select(Some(selected_idx));
+               }
+           } else {
+               app.sort_by_list_state.select(Some(0));
+           }
+       },
+       KeyCode::Up | KeyCode::Char('k') => {
+           if let Some(mut selected_idx) = app.sort_by_list_state.selected() {
+               if selected_idx > 0 {
+                   selected_idx = selected_idx - 1;
+                   app.sort_by_list_state.select(Some(selected_idx));
+               }
+           } else {
+               app.sort_by_list_state.select(Some(0));
+           }
+       },
+       _  => { }
+    }
+    return KeyInputResult::Continue;
+}
+
 fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
+    if app.sort_popup {
+        return handle_input_popup(app, key);
+    }
+
     match key.code {
         KeyCode::Char('q') => {
             return KeyInputResult::Stop;
@@ -591,14 +630,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     f.render_stateful_widget(events_list, v_panes[1], &mut app.event_list_state);
 
     if app.sort_popup {
-        // let mut sort_by_items: Vec<ListItem> = SortBy::iter()
-        //     .map(|sort_by| {
-        //         let span = Spans::from(vec![Span::raw(sort_by.to_string())]);
-        //
-        //         ListItem::new(vec![span])
-        //     })
-        //     .collect();
-        let mut sort_by_items:Vec<ListItem> = SortBy::all()
+        let sort_by_items:Vec<ListItem> = SortBy::all()
             .iter()
             .map(|sort_by| {
                 let span = Spans::from(vec![Span::raw(sort_by.to_string())]);
@@ -607,10 +639,14 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             })
             .collect();
         let sort_by_list = List::new(sort_by_items)
+            .highlight_style(style.bg(Color::Gray).fg(Color::DarkGray))
             .block(Block::default().title("Sort By").borders(Borders::ALL));
         let area = centered_rect(30, 50, f.size());
+        if app.sort_by_list_state.selected() == None {
+            app.sort_by_list_state.select(Some(0));
+        }
         f.render_widget(tui::widgets::Clear, area);
-        f.render_widget(sort_by_list, area);
+        f.render_stateful_widget(sort_by_list, area, &mut app.sort_by_list_state);
     }
 }
 
