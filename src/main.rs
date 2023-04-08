@@ -608,8 +608,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             .collect();
         let sort_by_list = List::new(sort_by_items)
             .block(Block::default().title("Sort By").borders(Borders::ALL));
-        let block = Block::default().title("Sort By").borders(Borders::ALL);
-        let area = centered_rect(60, 20, f.size());
+        let area = centered_rect(30, 50, f.size());
         f.render_widget(tui::widgets::Clear, area);
         f.render_widget(sort_by_list, area);
     }
