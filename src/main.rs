@@ -63,11 +63,34 @@ enum SortBy {
     Size(SortByDirection),
 }
 
+impl SortBy {
+    fn all() -> Vec<SortBy> {
+        vec![
+            SortBy::DateTime(SortByDirection::Asc),
+            SortBy::DateTime(SortByDirection::Dec),
+            SortBy::TypeName(SortByDirection::Asc),
+            SortBy::TypeName(SortByDirection::Dec),
+            SortBy::Name(SortByDirection::Asc),
+            SortBy::Name(SortByDirection::Dec),
+            SortBy::Size(SortByDirection::Asc),
+            SortBy::Size(SortByDirection::Dec)
+        ]
+    }
+}
+
 impl fmt::Display for SortBy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-        // or, alternatively:
-        // fmt::Debug::fmt(self, f)
+        let mut output: String = match self {
+            SortBy::TypeName(SortByDirection::Asc) => "TypeName (ASC)".to_string(),
+            SortBy::TypeName(SortByDirection::Dec) => "TypeName (DEC)".to_string(),
+            SortBy::DateTime(SortByDirection::Asc) => "DateTime (ASC)".to_string(),
+            SortBy::DateTime(SortByDirection::Dec) => "DateTime (DEC)".to_string(),
+            SortBy::Name(SortByDirection::Asc) => "Name (ASC)".to_string(),
+            SortBy::Name(SortByDirection::Dec) => "Name (DEC)".to_string(),
+            SortBy::Size(SortByDirection::Asc) => "Size (ASC)".to_string(),
+            SortBy::Size(SortByDirection::Dec) => "Size (DEC)".to_string(),
+        };
+        write!(f, "{:?}", output)
     }
 }
 
@@ -568,7 +591,15 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     f.render_stateful_widget(events_list, v_panes[1], &mut app.event_list_state);
 
     if app.sort_popup {
-        let mut sort_by_items: Vec<ListItem> = SortBy::iter()
+        // let mut sort_by_items: Vec<ListItem> = SortBy::iter()
+        //     .map(|sort_by| {
+        //         let span = Spans::from(vec![Span::raw(sort_by.to_string())]);
+        //
+        //         ListItem::new(vec![span])
+        //     })
+        //     .collect();
+        let mut sort_by_items:Vec<ListItem> = SortBy::all()
+            .iter()
             .map(|sort_by| {
                 let span = Spans::from(vec![Span::raw(sort_by.to_string())]);
 
