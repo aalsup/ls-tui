@@ -13,6 +13,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use fs_extra::dir::get_size;
 use thiserror::Error;
 use strum_macros::EnumIter;
 use tui::{
@@ -138,6 +139,7 @@ impl DirectoryList {
             (DirectoryListItem::ParentDir(_), DirectoryListItem::Entry(_)) => Ordering::Less,
             (DirectoryListItem::Entry(_), DirectoryListItem::ParentDir(_)) => Ordering::Greater,
             (DirectoryListItem::Entry(a), DirectoryListItem::Entry(b)) => {
+                #[allow(unused_assignments)]
                 let mut sort_by_direction = SortByDirection::default();
                 let mut retval = match sort_by {
                     SortBy::TypeName(direction) => {
@@ -535,12 +537,21 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                         style = link_style;
                     }
                     let mut filesize_str = "".to_string();
-                    if !item.file_type().unwrap().is_dir() {
-                        // determine the size
+                    if item.file_type().unwrap().is_file() {
                         let file_size = item.metadata().unwrap().len();
                         let byte = Byte::from_bytes(file_size.into());
                         let adjusted_byte = byte.get_appropriate_unit(false);
                         filesize_str = adjusted_byte.to_string();
+                    } else if item.file_type().unwrap().is_dir() {
+                        // Two problems here...
+                        // 1 - this should be async and populate value later (if slow)
+                        // 2 - Avoid 'Operation not permitted', also seen with `du` on MacOS
+                        /*
+                        let dir_size = get_size(item.path()).unwrap();
+                        let byte = Byte::from_bytes(dir_size.into());
+                        let adjusted_byte = byte.get_appropriate_unit(false);
+                        filesize_str = adjusted_byte.to_string();
+                         */
                     }
                     let meta = item.metadata().unwrap();
                     let uid = meta.st_uid();
