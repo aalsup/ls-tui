@@ -65,10 +65,10 @@ enum SortBy {
 impl SortBy {
     fn all() -> Vec<SortBy> {
         vec![
-            SortBy::DateTime(SortByDirection::Asc),
-            SortBy::DateTime(SortByDirection::Dec),
             SortBy::TypeName(SortByDirection::Asc),
             SortBy::TypeName(SortByDirection::Dec),
+            SortBy::DateTime(SortByDirection::Asc),
+            SortBy::DateTime(SortByDirection::Dec),
             SortBy::Name(SortByDirection::Asc),
             SortBy::Name(SortByDirection::Dec),
             SortBy::Size(SortByDirection::Asc),
@@ -258,7 +258,11 @@ impl App {
             event_list_state: ListState::default(),
             file_snippet: vec![],
             sort_by: SortBy::TypeName(SortByDirection::Asc),
-            sort_by_list_state: ListState::default(),
+            sort_by_list_state: {
+                let mut state = ListState::default();
+                state.select(Some(0));
+                state
+            },
             sort_popup: false,
         }
     }
