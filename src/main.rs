@@ -543,15 +543,13 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                         let adjusted_byte = byte.get_appropriate_unit(false);
                         filesize_str = adjusted_byte.to_string();
                     } else if item.file_type().unwrap().is_dir() {
-                        // Two problems here...
+                        // TODO: Two problems here...
                         // 1 - this should be async and populate value later (if slow)
                         // 2 - Avoid 'Operation not permitted', also seen with `du` on MacOS
-                        /*
-                        let dir_size = get_size(item.path()).unwrap();
+                        let dir_size = get_size(item.path()).unwrap_or(0);
                         let byte = Byte::from_bytes(dir_size.into());
                         let adjusted_byte = byte.get_appropriate_unit(false);
                         filesize_str = adjusted_byte.to_string();
-                         */
                     }
                     let meta = item.metadata().unwrap();
                     let uid = meta.st_uid();
