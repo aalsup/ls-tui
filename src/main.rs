@@ -1,8 +1,11 @@
 use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, time::{Duration, Instant}};
+use std::sync::mpsc::channel;
+use std::thread;
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt;
+use std::sync::{Arc, Mutex};
 
 use unix_permissions_ext::UNIXPermissionsExt;
 
@@ -25,6 +28,7 @@ use tui::{
     Frame, Terminal,
 };
 use users::get_user_by_uid;
+use notify::{Watcher, RecursiveMode, watcher};
 
 const MAX_EVENTS: usize = 5;
 const TICK_RATE_MILLIS: u64 = 250;
@@ -73,7 +77,7 @@ impl SortBy {
             SortBy::Name(SortByDirection::Asc),
             SortBy::Name(SortByDirection::Dec),
             SortBy::Size(SortByDirection::Asc),
-            SortBy::Size(SortByDirection::Dec)
+            SortBy::Size(SortByDirection::Dec),
         ]
     }
 }
@@ -105,15 +109,39 @@ enum DirectoryListItem {
 /// and have access to features such as natural scrolling.
 #[derive(Debug)]
 struct DirectoryList {
+    dir: String,
     state: TableState,
     items: Vec<DirectoryListItem>,
+    watch_thread: Arc<Mutex<Option<thread::Thread>>>,
 }
 
 impl DirectoryList {
-    fn refresh(&mut self, dir: &str, sort_by: SortBy) -> Result<(), io::Error> {
+    fn watch(&mut self) {
+        let mut watch_thread = self.watch_thread.clone();
+        let mut shared = watch_thread.lock().unwrap();
+        if shared.is_none() {
+            let dir = self.dir.clone();
+            thread::spawn(move || {
+                let (tx, rx) = channel();
+                let mut watcher = watcher(tx, Duration::from_secs(10)).unwrap();
+                watcher.watch(dir, RecursiveMode::Recursive).unwrap();
+
+                loop {
+                    // TODO: check `self.dir` vs `dir`; exit if not equal.
+
+                    match rx.recv() {
+                        Ok(event) => {},
+                        Err(e) => {},
+                    }
+                }
+            });
+        }
+    }
+
+    fn refresh(&mut self, sort_by: SortBy) -> Result<(), io::Error> {
         self.items.clear();
         // read all the items in the directory
-        self.items = fs::read_dir(dir)?
+        self.items = fs::read_dir(self.dir.clone())?
             .into_iter()
             .map(|x| x.unwrap())
             .map(|x| DirectoryListItem::Entry(x))
@@ -140,7 +168,7 @@ impl DirectoryList {
             (DirectoryListItem::Entry(_), DirectoryListItem::ParentDir(_)) => Ordering::Greater,
             (DirectoryListItem::Entry(a), DirectoryListItem::Entry(b)) => {
                 #[allow(unused_assignments)]
-                let mut sort_by_direction = SortByDirection::default();
+                    let mut sort_by_direction = SortByDirection::default();
                 let mut retval = match sort_by {
                     SortBy::TypeName(direction) => {
                         sort_by_direction = direction;
@@ -173,7 +201,7 @@ impl DirectoryList {
                 };
                 // reverse the order?
                 match sort_by_direction {
-                    SortByDirection::Asc => {},
+                    SortByDirection::Asc => {}
                     SortByDirection::Dec => retval = retval.reverse(),
                 }
                 retval
@@ -251,10 +279,12 @@ struct App {
 impl App {
     fn new(dir_name: String) -> App {
         App {
-            dir: dir_name,
+            dir: dir_name.clone(),
             dir_list: DirectoryList {
+                dir: dir_name.clone(),
                 state: TableState::default(),
                 items: vec![],
+                watch_thread: Arc::new(Mutex::new(None)),
             },
             events: vec![],
             event_list_state: ListState::default(),
@@ -269,10 +299,16 @@ impl App {
         }
     }
 
+    fn set_dir(&mut self, new_dir: String) {
+        self.dir = Path::new(new_dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
+        self.dir_list.dir = self.dir.clone();
+        self.dir_list.refresh(self.sort_by.clone());
+    }
+
     /// Do something every so often
     fn on_tick(&mut self) {
-        self.dir = Path::new(self.dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
-        self.dir_list.refresh(self.dir.as_str(), self.sort_by.clone()).ok();
+        // self.dir = Path::new(self.dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
+        // self.dir_list.refresh(self.dir.as_str(), self.sort_by.clone()).ok();
     }
 
     /// Move to a new directory -- relative paths are ok, absolute paths are ok.
@@ -284,8 +320,7 @@ impl App {
         let chg_path = cur_path.join(chg_dir).canonicalize()?;
 
         // update the current info
-        self.dir = chg_path.to_str().unwrap().to_string();
-        self.dir_list.refresh(&self.dir, self.sort_by.clone())?;
+        self.set_dir(chg_path.to_str().unwrap().to_string());
 
         let cur_path_str = cur_path.to_str().unwrap().to_string();
         let chg_path_str = chg_path.to_str().unwrap().to_string();
@@ -387,35 +422,35 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
-   match key.code {
-       KeyCode::Char('q') => {
-           app.sort_popup = false;
-       },
-       KeyCode::Enter | KeyCode::Char(' ') => {
-           app.sort_by = SortBy::all()[app.sort_by_list_state.selected().unwrap()].clone();
-           app.sort_popup = false;
-       },
-       KeyCode::Down | KeyCode::Char('j') => {
-           if let Some(mut selected_idx) = app.sort_by_list_state.selected() {
-               selected_idx = selected_idx + 1;
-               if selected_idx < SortBy::all().len() {
-                   app.sort_by_list_state.select(Some(selected_idx));
-               }
-           } else {
-               app.sort_by_list_state.select(Some(0));
-           }
-       },
-       KeyCode::Up | KeyCode::Char('k') => {
-           if let Some(mut selected_idx) = app.sort_by_list_state.selected() {
-               if selected_idx > 0 {
-                   selected_idx = selected_idx - 1;
-                   app.sort_by_list_state.select(Some(selected_idx));
-               }
-           } else {
-               app.sort_by_list_state.select(Some(0));
-           }
-       },
-       _  => { }
+    match key.code {
+        KeyCode::Char('q') => {
+            app.sort_popup = false;
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            app.sort_by = SortBy::all()[app.sort_by_list_state.selected().unwrap()].clone();
+            app.sort_popup = false;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(mut selected_idx) = app.sort_by_list_state.selected() {
+                selected_idx = selected_idx + 1;
+                if selected_idx < SortBy::all().len() {
+                    app.sort_by_list_state.select(Some(selected_idx));
+                }
+            } else {
+                app.sort_by_list_state.select(Some(0));
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(mut selected_idx) = app.sort_by_list_state.selected() {
+                if selected_idx > 0 {
+                    selected_idx = selected_idx - 1;
+                    app.sort_by_list_state.select(Some(selected_idx));
+                }
+            } else {
+                app.sort_by_list_state.select(Some(0));
+            }
+        }
+        _ => {}
     }
     return KeyInputResult::Continue;
 }
@@ -472,9 +507,6 @@ fn run_app<B: Backend>(
     tick_rate: Duration,
 ) -> io::Result<()> {
     let mut last_tick = Instant::now();
-
-    // read the directory contents
-    app.dir_list.refresh(app.dir.as_str(), app.sort_by.clone())?;
 
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
@@ -643,7 +675,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     f.render_stateful_widget(events_list, v_panes[1], &mut app.event_list_state);
 
     if app.sort_popup {
-        let sort_by_items:Vec<ListItem> = SortBy::all()
+        let sort_by_items: Vec<ListItem> = SortBy::all()
             .iter()
             .map(|sort_by| {
                 let span = Spans::from(vec![Span::raw(sort_by.to_string())]);
