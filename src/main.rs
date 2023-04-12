@@ -1,11 +1,10 @@
 use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, time::{Duration, Instant}};
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt;
-use std::sync::{Arc, Mutex};
 
 use unix_permissions_ext::UNIXPermissionsExt;
 
@@ -110,35 +109,54 @@ enum DirectoryListItem {
 #[derive(Debug)]
 struct DirectoryList {
     dir: String,
+    sort_by: SortBy,
+    sort_by_list_state: ListState,
     state: TableState,
     items: Vec<DirectoryListItem>,
-    watch_thread: Arc<Mutex<Option<thread::Thread>>>,
+    watcher_tx: Option<Sender<String>>,
+    watcher_rx: Option<Receiver<()>>,
 }
 
 impl DirectoryList {
     fn watch(&mut self) {
-        let mut watch_thread = self.watch_thread.clone();
-        let mut shared = watch_thread.lock().unwrap();
-        if shared.is_none() {
-            let dir = self.dir.clone();
-            thread::spawn(move || {
-                let (tx, rx) = channel();
-                let mut watcher = watcher(tx, Duration::from_secs(10)).unwrap();
-                watcher.watch(dir, RecursiveMode::Recursive).unwrap();
-
-                loop {
-                    // TODO: check `self.dir` vs `dir`; exit if not equal.
-
-                    match rx.recv() {
-                        Ok(event) => {},
-                        Err(e) => {},
+        match &self.watcher_tx {
+            Some(watcher_tx) => {
+                // send the new directory to the watcher thread
+                watcher_tx.send(self.dir.clone());
+            },
+            None => {
+                // we need to create a new watcher thread
+                let dir = self.dir.clone();
+                let (dir_tx, dir_rx): (Sender<String>, Receiver<String>) = channel();
+                // this is used to send updates to the watcher
+                self.watcher_tx = Some(dir_tx);
+                // this is used to send updates from the watcher
+                let (watching_tx, watching_rx): (Sender<()>, Receiver<()>) = channel();
+                self.watcher_rx = Some(watching_rx);
+                thread::spawn(move || {
+                    let mut dir = dir.clone();
+                    let (watch_tx, watch_rx) = channel();
+                    let mut watcher = watcher(watch_tx, Duration::from_secs(10)).unwrap();
+                    watcher.watch(dir.clone(), RecursiveMode::Recursive).unwrap();
+                    loop {
+                        if let Ok(dir_event) = dir_rx.try_recv() {
+                            // changed directory to watch
+                            watcher.unwatch(dir.clone());
+                            dir = dir_event.clone();
+                            watcher.watch(dir_event, RecursiveMode::Recursive).unwrap();
+                        }
+                        if let Ok(_) = watch_rx.try_recv() {
+                            // watched directory changed
+                            // TODO: trigger self.refresh()
+                            watching_tx.send(());
+                        }
                     }
-                }
-            });
+                });
+            }
         }
     }
 
-    fn refresh(&mut self, sort_by: SortBy) -> Result<(), io::Error> {
+    fn refresh(&mut self) -> Result<(), io::Error> {
         self.items.clear();
         // read all the items in the directory
         self.items = fs::read_dir(self.dir.clone())?
@@ -149,7 +167,7 @@ impl DirectoryList {
         self.items
             .insert(0, DirectoryListItem::ParentDir("..".to_string()));
         self.items
-            .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, sort_by.clone()));
+            .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, self.sort_by.clone()));
 
         if self.state.selected() == None {
             self.state.select(Some(0));
@@ -271,8 +289,6 @@ struct App {
     events: Vec<String>,
     event_list_state: ListState,
     file_snippet: Vec<String>,
-    sort_by: SortBy,
-    sort_by_list_state: ListState,
     sort_popup: bool,
 }
 
@@ -284,17 +300,18 @@ impl App {
                 dir: dir_name.clone(),
                 state: TableState::default(),
                 items: vec![],
-                watch_thread: Arc::new(Mutex::new(None)),
+                watcher_tx: None,
+                watcher_rx: None,
+                sort_by: SortBy::TypeName(SortByDirection::Asc),
+                sort_by_list_state: {
+                    let mut state = ListState::default();
+                    state.select(Some(0));
+                    state
+                },
             },
             events: vec![],
             event_list_state: ListState::default(),
             file_snippet: vec![],
-            sort_by: SortBy::TypeName(SortByDirection::Asc),
-            sort_by_list_state: {
-                let mut state = ListState::default();
-                state.select(Some(0));
-                state
-            },
             sort_popup: false,
         }
     }
@@ -302,7 +319,8 @@ impl App {
     fn set_dir(&mut self, new_dir: String) {
         self.dir = Path::new(new_dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
         self.dir_list.dir = self.dir.clone();
-        self.dir_list.refresh(self.sort_by.clone());
+        self.dir_list.refresh();
+        self.dir_list.watch();
     }
 
     /// Do something every so often
@@ -427,27 +445,27 @@ fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
             app.sort_popup = false;
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
-            app.sort_by = SortBy::all()[app.sort_by_list_state.selected().unwrap()].clone();
+            app.dir_list.sort_by = SortBy::all()[app.dir_list.sort_by_list_state.selected().unwrap()].clone();
             app.sort_popup = false;
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(mut selected_idx) = app.sort_by_list_state.selected() {
+            if let Some(mut selected_idx) = app.dir_list.sort_by_list_state.selected() {
                 selected_idx = selected_idx + 1;
                 if selected_idx < SortBy::all().len() {
-                    app.sort_by_list_state.select(Some(selected_idx));
+                    app.dir_list.sort_by_list_state.select(Some(selected_idx));
                 }
             } else {
-                app.sort_by_list_state.select(Some(0));
+                app.dir_list.sort_by_list_state.select(Some(0));
             }
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(mut selected_idx) = app.sort_by_list_state.selected() {
+            if let Some(mut selected_idx) = app.dir_list.sort_by_list_state.selected() {
                 if selected_idx > 0 {
                     selected_idx = selected_idx - 1;
-                    app.sort_by_list_state.select(Some(selected_idx));
+                    app.dir_list.sort_by_list_state.select(Some(selected_idx));
                 }
             } else {
-                app.sort_by_list_state.select(Some(0));
+                app.dir_list.sort_by_list_state.select(Some(0));
             }
         }
         _ => {}
@@ -687,11 +705,11 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             .highlight_style(style.bg(Color::Gray).fg(Color::DarkGray))
             .block(Block::default().title("Sort By").borders(Borders::ALL));
         let area = centered_rect(30, 50, f.size());
-        if app.sort_by_list_state.selected() == None {
-            app.sort_by_list_state.select(Some(0));
+        if app.dir_list.sort_by_list_state.selected() == None {
+            app.dir_list.sort_by_list_state.select(Some(0));
         }
         f.render_widget(tui::widgets::Clear, area);
-        f.render_stateful_widget(sort_by_list, area, &mut app.sort_by_list_state);
+        f.render_stateful_widget(sort_by_list, area, &mut app.dir_list.sort_by_list_state);
     }
 }
 
