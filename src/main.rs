@@ -1,3 +1,5 @@
+// TODO: fix crash when a file is deleted
+
 use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, time::{Duration, Instant}};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
@@ -27,7 +29,7 @@ use tui::{
     Frame, Terminal,
 };
 use users::get_user_by_uid;
-use notify::{Watcher, RecursiveMode, watcher};
+use notify::{Watcher, RecursiveMode};
 
 const MAX_EVENTS: usize = 5;
 const TICK_RATE_MILLIS: u64 = 250;
@@ -134,21 +136,22 @@ impl DirectoryList {
                 let (watching_tx, watching_rx): (Sender<()>, Receiver<()>) = channel();
                 self.watcher_rx = Some(watching_rx);
                 thread::spawn(move || {
+                    let mut watcher = notify::recommended_watcher(|res| {
+                        match res {
+                            Ok(event) => {
+                                watching_tx.send(());
+                            },
+                            Err(e) => {}
+                        }
+                    }).unwrap();
+                    watcher.watch(Path::new(dir.as_str()), RecursiveMode::Recursive);
                     let mut dir = dir.clone();
-                    let (watch_tx, watch_rx) = channel();
-                    let mut watcher = watcher(watch_tx, Duration::from_secs(10)).unwrap();
-                    watcher.watch(dir.clone(), RecursiveMode::Recursive).unwrap();
                     loop {
                         if let Ok(dir_event) = dir_rx.try_recv() {
                             // changed directory to watch
-                            watcher.unwatch(dir.clone());
+                            watcher.unwatch(Path::new(dir.as_str()));
                             dir = dir_event.clone();
-                            watcher.watch(dir_event, RecursiveMode::Recursive).unwrap();
-                        }
-                        if let Ok(_) = watch_rx.try_recv() {
-                            // watched directory changed
-                            // TODO: trigger self.refresh()
-                            watching_tx.send(());
+                            watcher.watch(Path::new(dir_event.as_str()), RecursiveMode::Recursive).unwrap();
                         }
                     }
                 });
@@ -294,7 +297,7 @@ struct App {
 
 impl App {
     fn new(dir_name: String) -> App {
-        App {
+        let mut app = App {
             dir: dir_name.clone(),
             dir_list: DirectoryList {
                 dir: dir_name.clone(),
@@ -313,7 +316,9 @@ impl App {
             event_list_state: ListState::default(),
             file_snippet: vec![],
             sort_popup: false,
-        }
+        };
+        app.set_dir(dir_name);
+        app
     }
 
     fn set_dir(&mut self, new_dir: String) {
