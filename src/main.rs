@@ -10,6 +10,8 @@ use std::os::macos::fs::MetadataExt;
 
 use unix_permissions_ext::UNIXPermissionsExt;
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use byte_unit::Byte;
 use clap::Parser;
 use crossterm::{
@@ -127,16 +129,15 @@ impl DirectoryList {
                 watcher_tx.send(self.dir.clone());
             },
             None => {
-                // we need to create a new watcher thread
                 let dir = self.dir.clone();
                 let (dir_tx, dir_rx): (Sender<String>, Receiver<String>) = channel();
                 // this is used to send updates to the watcher
                 self.watcher_tx = Some(dir_tx);
-                // this is used to send updates from the watcher
+                // this is used to receive updates from the watcher
                 let (watching_tx, watching_rx): (Sender<()>, Receiver<()>) = channel();
                 self.watcher_rx = Some(watching_rx);
-                thread::spawn(move || {
-                    let mut watcher = notify::recommended_watcher(|res| {
+                tokio::spawn(async move {
+                    let mut watcher = notify::recommended_watcher(move |res| {
                         match res {
                             Ok(event) => {
                                 watching_tx.send(());
@@ -147,7 +148,7 @@ impl DirectoryList {
                     watcher.watch(Path::new(dir.as_str()), RecursiveMode::Recursive);
                     let mut dir = dir.clone();
                     loop {
-                        if let Ok(dir_event) = dir_rx.try_recv() {
+                        if let Ok(dir_event) = dir_rx.recv() {
                             // changed directory to watch
                             watcher.unwatch(Path::new(dir.as_str()));
                             dir = dir_event.clone();
@@ -330,6 +331,12 @@ impl App {
 
     /// Do something every so often
     fn on_tick(&mut self) {
+        if let Some(rx) = &self.dir_list.watcher_rx {
+            if let Ok(()) = rx.try_recv() {
+                self.add_event("Directory update event received".to_string());
+                self.dir_list.refresh();
+            }
+        }
         // self.dir = Path::new(self.dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
         // self.dir_list.refresh(self.dir.as_str(), self.sort_by.clone()).ok();
     }
@@ -413,7 +420,8 @@ enum KeyInputResult {
     Stop,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     // setup terminal
@@ -593,7 +601,16 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                     }
                     let mut filesize_str = "".to_string();
                     if item.file_type().unwrap().is_file() {
-                        let file_size = item.metadata().unwrap().len();
+                        let file_size = {
+                            match item.metadata() {
+                                Ok(meta) => {
+                                    meta.len()
+                                },
+                                Err(_) => {
+                                    0
+                                }
+                            }
+                        };
                         let byte = Byte::from_bytes(file_size.into());
                         let adjusted_byte = byte.get_appropriate_unit(false);
                         filesize_str = adjusted_byte.to_string();
