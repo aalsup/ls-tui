@@ -1,8 +1,6 @@
-// TODO: fix crash when a file is deleted
-
 use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, time::{Duration, Instant}};
+use std::fs::{FileType, Permissions};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::thread;
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
@@ -19,6 +17,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use crossterm::terminal::size;
 use fs_extra::dir::get_size;
 use thiserror::Error;
 use strum_macros::EnumIter;
@@ -41,6 +40,8 @@ const SNIPPET_LINES: usize = 50;
 pub enum AppError {
     #[error("unable to access directory")]
     DirListError(#[from] io::Error),
+    #[error("unable to watch directory for changes")]
+    WatchError,
 }
 
 #[derive(Parser, Debug)]
@@ -101,9 +102,51 @@ impl fmt::Display for SortBy {
     }
 }
 
+#[derive(Debug, Clone)]
+struct DirEntryData {
+    name: String,
+    file_type: FileType,
+    size: Option<u64>,
+    uid: u32,
+    gid: u32,
+    permissions: Permissions,
+}
+
+struct SizeNotification {
+    name: String,
+    size: u64,
+}
+
+impl From<DirEntry> for DirEntryData {
+    fn from(dir_entry: DirEntry) -> Self {
+        let file_name = dir_entry.file_name().into_string().unwrap();
+        let file_type = dir_entry.file_type().unwrap();
+        let mut file_size: Option<u64> = None;
+        if file_type.is_file() {
+            // only get file sizes now; otherwise, async via `register_size_watcher()`
+            file_size = match dir_entry.metadata() {
+                Ok(metadata) => { Some(metadata.len()) },
+                Err(_) => { None }
+            };
+        }
+        let meta = dir_entry.metadata().unwrap();
+        let uid = meta.st_uid();
+        let gid = meta.st_gid();
+        let permissions = meta.permissions();
+        DirEntryData {
+            name: file_name,
+            file_type: file_type,
+            size: file_size,
+            uid: uid,
+            gid: gid,
+            permissions: permissions,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum DirectoryListItem {
-    Entry(DirEntry),
+    Entry(DirEntryData),
     ParentDir(String),
 }
 
@@ -117,12 +160,14 @@ struct DirectoryList {
     sort_by_list_state: ListState,
     state: TableState,
     items: Vec<DirectoryListItem>,
-    watcher_tx: Option<Sender<String>>,
-    watcher_rx: Option<Receiver<()>>,
+    watcher_tx: Option<Sender<String>>,                // watcher should switch dir
+    watcher_rx: Option<Receiver<()>>,                  // watched dir has changed
+    dir_size_tx: Option<Sender<SizeNotification>>,     // dir size sender
+    dir_size_rx: Option<Receiver<SizeNotification>>,   // dir size receiver
 }
 
 impl DirectoryList {
-    fn watch(&mut self) {
+    fn watch(&mut self) -> Result<(), AppError> {
         match &self.watcher_tx {
             Some(watcher_tx) => {
                 // send the new directory to the watcher thread
@@ -139,10 +184,10 @@ impl DirectoryList {
                 tokio::spawn(async move {
                     let mut watcher = notify::recommended_watcher(move |res| {
                         match res {
-                            Ok(event) => {
+                            Ok(_) => {
                                 watching_tx.send(());
                             },
-                            Err(e) => {}
+                            Err(_) => {}
                         }
                     }).unwrap();
                     watcher.watch(Path::new(dir.as_str()), RecursiveMode::Recursive);
@@ -158,6 +203,35 @@ impl DirectoryList {
                 });
             }
         }
+        Ok(())
+    }
+
+    fn register_size_watcher(&mut self, data: DirEntryData) {
+        if self.dir_size_rx.is_none() {
+           // construct a new channel
+           let (tx, rx): (Sender<SizeNotification>, Receiver<SizeNotification>) = channel();
+           self.dir_size_tx = Some(tx.clone());
+           self.dir_size_rx = Some(rx);
+        }
+
+        let parent_dir = self.dir.clone();
+        if let Some(tx) = &self.dir_size_tx {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let cur_path = Path::new(parent_dir.as_str());
+                let file_path = cur_path.join(&data.name).canonicalize().unwrap();
+                let dir_size = get_size(file_path).unwrap_or(0);
+                tx.send(SizeNotification {
+                    name: data.name.clone(),
+                    size: dir_size,
+                }).expect(format!("Error sending SizeNotification for {}", data.name).as_str());
+            });
+        }
+    }
+
+    fn smart_refresh(&mut self) -> Result<(), io::Error> {
+        // figure out how to only touch things that have changed since the previous read
+        Ok(())
     }
 
     fn refresh(&mut self) -> Result<(), io::Error> {
@@ -166,6 +240,11 @@ impl DirectoryList {
         self.items = fs::read_dir(self.dir.clone())?
             .into_iter()
             .map(|x| x.unwrap())
+            .map(|x| {
+                let data: DirEntryData = x.into();
+                self.register_size_watcher(data.clone());
+                data
+            })
             .map(|x| DirectoryListItem::Entry(x))
             .collect();
         self.items
@@ -194,19 +273,19 @@ impl DirectoryList {
                 let mut retval = match sort_by {
                     SortBy::TypeName(direction) => {
                         sort_by_direction = direction;
-                        if a.file_type().unwrap().is_dir() && !b.file_type().unwrap().is_dir() {
+                        if a.file_type.is_dir() && !b.file_type.is_dir() {
                             Ordering::Less
-                        } else if !a.file_type().unwrap().is_dir() && b.file_type().unwrap().is_dir() {
+                        } else if !a.file_type.is_dir() && b.file_type.is_dir() {
                             Ordering::Greater
                         } else {
-                            a.file_name().cmp(&b.file_name())
+                            a.name.cmp(&b.name)
                         }
                     }
                     SortBy::Size(direction) => {
                         sort_by_direction = direction;
-                        if a.metadata().unwrap().len() < b.metadata().unwrap().len() {
+                        if a.size < b.size {
                             Ordering::Less
-                        } else if a.metadata().unwrap().len() > b.metadata().unwrap().len() {
+                        } else if a.size > b.size {
                             Ordering::Greater
                         } else {
                             Ordering::Equal
@@ -214,11 +293,12 @@ impl DirectoryList {
                     }
                     SortBy::Name(direction) => {
                         sort_by_direction = direction;
-                        a.file_name().cmp(&b.file_name())
+                        a.name.cmp(&b.name)
                     }
                     SortBy::DateTime(direction) => {
                         sort_by_direction = direction;
-                        a.metadata().unwrap().modified().unwrap().cmp(&b.metadata().unwrap().modified().unwrap())
+                        todo!();
+                        // a.metadata().unwrap().modified().unwrap().cmp(&b.metadata().unwrap().modified().unwrap())
                     }
                 };
                 // reverse the order?
@@ -238,9 +318,7 @@ impl DirectoryList {
         for (i, x) in self.items.iter().enumerate() {
             match x {
                 DirectoryListItem::Entry(entry) => {
-                    let fname = entry.file_name()
-                        .into_string()
-                        .unwrap_or("".to_string());
+                    let fname = entry.name.to_string();
                     if name.eq(fname.as_str()) {
                         self.state.select(Some(i));
                         break;
@@ -312,6 +390,8 @@ impl App {
                     state.select(Some(0));
                     state
                 },
+                dir_size_rx: None,
+                dir_size_tx: None,
             },
             events: vec![],
             event_list_state: ListState::default(),
@@ -331,14 +411,34 @@ impl App {
 
     /// Do something every so often
     fn on_tick(&mut self) {
+        // check if filesystem has changed
         if let Some(rx) = &self.dir_list.watcher_rx {
             if let Ok(()) = rx.try_recv() {
                 self.add_event("Directory update event received".to_string());
-                self.dir_list.refresh();
+                self.dir_list.smart_refresh();
             }
         }
-        // self.dir = Path::new(self.dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
-        // self.dir_list.refresh(self.dir.as_str(), self.sort_by.clone()).ok();
+        // check for size notifications
+        loop {
+            if let Some(rx) = &self.dir_list.dir_size_rx {
+                if let Ok(size_notify) = rx.try_recv() {
+                    self.add_event(format!("Directory size computed for: {}", size_notify.name));
+                    for item in &mut self.dir_list.items {
+                        match item {
+                            DirectoryListItem::Entry(e) => {
+                                if e.name == size_notify.name {
+                                    e.size = Some(size_notify.size);
+                                    break;
+                                }
+                            }
+                            DirectoryListItem::ParentDir(_) => {}
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     /// Move to a new directory -- relative paths are ok, absolute paths are ok.
@@ -391,10 +491,13 @@ impl App {
         if let Some(sel_idx) = self.dir_list.state.selected() {
             match &self.dir_list.items[sel_idx] {
                 DirectoryListItem::Entry(entry) => {
-                    if !entry.file_type().unwrap().is_dir() {
-                        if let Some(mime_type) = tree_magic_mini::from_filepath(&entry.path()) {
+                    if entry.file_type.is_file() {
+                        let cur_dir = self.dir.clone();
+                        let cur_path = Path::new(&cur_dir);
+                        let entry_path = cur_path.join(&entry.name);
+                        if let Some(mime_type) = tree_magic_mini::from_filepath(entry_path.as_path()) {
                             if mime_type.starts_with("text") {
-                                let file = File::open(&entry.path())?;
+                                let file = File::open(entry_path)?;
                                 let reader = BufReader::new(file);
                                 for (index, line) in reader.lines().enumerate() {
                                     if index > SNIPPET_LINES { break; }
@@ -402,7 +505,7 @@ impl App {
                                 }
                             }
                             self.add_event(format!("File: {}, Type: {}",
-                                                   entry.file_name().into_string().unwrap_or("?".to_string()),
+                                                   entry.name,
                                                    mime_type.to_string()));
                         }
                     }
@@ -503,10 +606,12 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
                         app.navigate_to_relative_directory(chg_dir.to_owned()).ok();
                     }
                     DirectoryListItem::Entry(entry) => {
-                        if entry.file_type().unwrap().is_dir() {
-                            app.navigate_to_relative_directory(entry.file_name().into_string().unwrap()).ok();
+                        if entry.file_type.is_dir() {
+                            app.navigate_to_relative_directory(entry.name.clone()).ok();
                         } else {
-                            opener::open(entry.path()).ok();
+                            let cur_path = Path::new(&app.dir);
+                            let entry_path = cur_path.join(&entry.name);
+                            opener::open(entry_path.as_path());
                         }
                     }
                 }
@@ -589,48 +694,30 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                     Row::new(vec![file_name.as_str()]).style(dir_style)
                 }
                 DirectoryListItem::Entry(item) => {
-                    // The item gets its own line
-                    let file_name = item.file_name().into_string().unwrap();
+                    let file_name = item.name.clone();
                     // determine the type of file (directory, symlink, etc.)
                     let mut style = Style::default();
-                    if item.file_type().unwrap().is_dir() {
+                    if item.file_type.is_dir() {
                         style = dir_style;
                     }
-                    if item.file_type().unwrap().is_symlink() {
+                    if item.file_type.is_symlink() {
                         style = link_style;
                     }
-                    let mut filesize_str = "".to_string();
-                    if item.file_type().unwrap().is_file() {
-                        let file_size = {
-                            match item.metadata() {
-                                Ok(meta) => {
-                                    meta.len()
-                                },
-                                Err(_) => {
-                                    0
-                                }
-                            }
-                        };
-                        let byte = Byte::from_bytes(file_size.into());
-                        let adjusted_byte = byte.get_appropriate_unit(false);
-                        filesize_str = adjusted_byte.to_string();
-                    } else if item.file_type().unwrap().is_dir() {
-                        // TODO: Two problems here...
-                        // 1 - this should be async and populate value later (if slow)
-                        // 2 - Avoid 'Operation not permitted', also seen with `du` on MacOS
-                        let dir_size = get_size(item.path()).unwrap_or(0);
-                        let byte = Byte::from_bytes(dir_size.into());
-                        let adjusted_byte = byte.get_appropriate_unit(false);
-                        filesize_str = adjusted_byte.to_string();
-                    }
-                    let meta = item.metadata().unwrap();
-                    let uid = meta.st_uid();
-                    let mut user = uid.to_string();
-                    if let Some(uname) = get_user_by_uid(uid) {
+                    let mut filesize_str = {
+                        if let Some(size) = item.size {
+                            let byte = Byte::from_bytes(size.into());
+                            let adjusted_byte = byte.get_appropriate_unit(false);
+                            adjusted_byte.to_string()
+                        } else {
+                            "?".to_string()
+                        }
+                    };
+                    let mut user = item.uid.to_string();
+                    if let Some(uname) = get_user_by_uid(item.uid) {
                         user = uname.name().to_os_string().into_string().unwrap();
                     }
-                    let gid = meta.st_gid().to_string();
-                    let perms = meta.permissions();
+                    let gid = item.gid.to_string();
+                    let perms = item.permissions.clone();
                     let perms_str = perms.stringify();
                     let user_perms = perms_str[0..3].to_string();
                     let group_perms = perms_str[3..6].to_string();
