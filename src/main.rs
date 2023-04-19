@@ -13,7 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use byte_unit::Byte;
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent},
+    event::{self, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -31,6 +31,7 @@ use tui::{
 };
 use users::get_user_by_uid;
 use notify::{Watcher, RecursiveMode};
+use notify::event::Event;
 
 const MAX_EVENTS: usize = 5;
 const TICK_RATE_MILLIS: u64 = 250;
@@ -161,7 +162,7 @@ struct DirectoryList {
     state: TableState,
     items: Vec<DirectoryListItem>,
     watcher_tx: Option<Sender<String>>,                // watcher should switch dir
-    watcher_rx: Option<Receiver<()>>,                  // watched dir has changed
+    watcher_rx: Option<Receiver<Event>>,                  // watched dir has changed
     dir_size_tx: Option<Sender<SizeNotification>>,     // dir size sender
     dir_size_rx: Option<Receiver<SizeNotification>>,   // dir size receiver
 }
@@ -179,25 +180,25 @@ impl DirectoryList {
                 // this is used to send updates to the watcher
                 self.watcher_tx = Some(dir_tx);
                 // this is used to receive updates from the watcher
-                let (watching_tx, watching_rx): (Sender<()>, Receiver<()>) = channel();
+                let (watching_tx, watching_rx): (Sender<Event>, Receiver<Event>) = channel();
                 self.watcher_rx = Some(watching_rx);
                 tokio::spawn(async move {
                     let mut watcher = notify::recommended_watcher(move |res| {
                         match res {
-                            Ok(_) => {
-                                watching_tx.send(());
+                            Ok(event) => {
+                                watching_tx.send(event);
                             },
                             Err(_) => {}
                         }
                     }).unwrap();
-                    watcher.watch(Path::new(dir.as_str()), RecursiveMode::Recursive);
+                    watcher.watch(Path::new(dir.as_str()), RecursiveMode::NonRecursive);
                     let mut dir = dir.clone();
                     loop {
                         if let Ok(dir_event) = dir_rx.recv() {
                             // changed directory to watch
                             watcher.unwatch(Path::new(dir.as_str()));
                             dir = dir_event.clone();
-                            watcher.watch(Path::new(dir_event.as_str()), RecursiveMode::Recursive).unwrap();
+                            watcher.watch(Path::new(dir_event.as_str()), RecursiveMode::Recursive);
                         }
                     }
                 });
@@ -242,7 +243,9 @@ impl DirectoryList {
             .map(|x| x.unwrap())
             .map(|x| {
                 let data: DirEntryData = x.into();
-                self.register_size_watcher(data.clone());
+                if data.file_type.is_dir() || data.file_type.is_symlink() {
+                    self.register_size_watcher(data.clone());
+                }
                 data
             })
             .map(|x| DirectoryListItem::Entry(x))
@@ -413,8 +416,8 @@ impl App {
     fn on_tick(&mut self) {
         // check if filesystem has changed
         if let Some(rx) = &self.dir_list.watcher_rx {
-            if let Ok(()) = rx.try_recv() {
-                self.add_event("Directory update event received".to_string());
+            if let Ok(event) = rx.try_recv() {
+                self.add_event(format!("FS event: {:?}", event.paths));
                 self.dir_list.smart_refresh();
             }
         }
@@ -651,7 +654,7 @@ fn run_app<B: Backend>(
             .checked_sub(last_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
         if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
+            if let crossterm::event::Event::Key(key) = event::read()? {
                 match handle_input(&mut app, key) {
                     KeyInputResult::Stop => {
                         return Ok(());
