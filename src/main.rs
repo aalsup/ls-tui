@@ -1,5 +1,6 @@
 use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, time::{Duration, Instant}};
 use std::fs::{FileType, Permissions};
+use std::io::Write;
 //use std::sync::mpsc::{channel, Receiver, Sender};
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
@@ -114,6 +115,7 @@ struct DirEntryData {
     permissions: Permissions,
 }
 
+#[derive(Debug)]
 struct SizeNotification {
     name: String,
     size: u64,
@@ -219,7 +221,7 @@ impl DirectoryList {
         if self.dir_size_rx.is_none() {
             // construct a new channel
             let (tx, rx): (mpsc::Sender<SizeNotification>, mpsc::Receiver<SizeNotification>) = mpsc::channel(20);
-            self.dir_size_tx = Some(tx.clone());
+            self.dir_size_tx = Some(tx);
             self.dir_size_rx = Some(rx);
         }
 
@@ -233,7 +235,7 @@ impl DirectoryList {
                 tx.send(SizeNotification {
                     name: data.name.clone(),
                     size: dir_size,
-                });
+                }).await.unwrap();
             });
         }
     }
