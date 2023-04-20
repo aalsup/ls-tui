@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, time::{Duration, Instant}};
 use std::fs::{FileType, Permissions};
-use std::sync::mpsc::{channel, Receiver, Sender};
+//use std::sync::mpsc::{channel, Receiver, Sender};
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
@@ -9,6 +9,7 @@ use std::os::macos::fs::MetadataExt;
 use unix_permissions_ext::UNIXPermissionsExt;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 
 use byte_unit::Byte;
 use clap::Parser;
@@ -126,7 +127,7 @@ impl From<DirEntry> for DirEntryData {
         if file_type.is_file() {
             // only get file sizes now; otherwise, async via `register_size_watcher()`
             file_size = match dir_entry.metadata() {
-                Ok(metadata) => { Some(metadata.len()) },
+                Ok(metadata) => { Some(metadata.len()) }
                 Err(_) => { None }
             };
         }
@@ -161,10 +162,13 @@ struct DirectoryList {
     sort_by_list_state: ListState,
     state: TableState,
     items: Vec<DirectoryListItem>,
-    watcher_tx: Option<Sender<String>>,                // watcher should switch dir
-    watcher_rx: Option<Receiver<Event>>,                  // watched dir has changed
-    dir_size_tx: Option<Sender<SizeNotification>>,     // dir size sender
-    dir_size_rx: Option<Receiver<SizeNotification>>,   // dir size receiver
+    watcher_tx: Option<mpsc::Sender<String>>,
+    // watcher should switch dir
+    watcher_rx: Option<mpsc::Receiver<Event>>,
+    // watched dir has changed
+    dir_size_tx: Option<mpsc::Sender<SizeNotification>>,
+    // dir size sender
+    dir_size_rx: Option<mpsc::Receiver<SizeNotification>>,   // dir size receiver
 }
 
 impl DirectoryList {
@@ -173,32 +177,36 @@ impl DirectoryList {
             Some(watcher_tx) => {
                 // send the new directory to the watcher thread
                 watcher_tx.send(self.dir.clone());
-            },
+            }
             None => {
                 let dir = self.dir.clone();
-                let (dir_tx, dir_rx): (Sender<String>, Receiver<String>) = channel();
+                let (dir_tx, mut dir_rx): (mpsc::Sender<String>, mpsc::Receiver<String>) = mpsc::channel(1);
                 // this is used to send updates to the watcher
                 self.watcher_tx = Some(dir_tx);
                 // this is used to receive updates from the watcher
-                let (watching_tx, watching_rx): (Sender<Event>, Receiver<Event>) = channel();
+                let (watching_tx, watching_rx): (mpsc::Sender<Event>, mpsc::Receiver<Event>) = mpsc::channel(10);
                 self.watcher_rx = Some(watching_rx);
                 tokio::spawn(async move {
                     let mut watcher = notify::recommended_watcher(move |res| {
                         match res {
                             Ok(event) => {
                                 watching_tx.send(event);
-                            },
+                            }
                             Err(_) => {}
                         }
                     }).unwrap();
                     watcher.watch(Path::new(dir.as_str()), RecursiveMode::NonRecursive);
                     let mut dir = dir.clone();
                     loop {
-                        if let Ok(dir_event) = dir_rx.recv() {
-                            // changed directory to watch
-                            watcher.unwatch(Path::new(dir.as_str()));
-                            dir = dir_event.clone();
-                            watcher.watch(Path::new(dir_event.as_str()), RecursiveMode::Recursive);
+                        let dir_event = dir_rx.recv().await;
+                        match dir_event {
+                            Some(dir_event) => {
+                                // changed directory to watch
+                                watcher.unwatch(Path::new(dir.as_str()));
+                                dir = dir_event.clone();
+                                watcher.watch(Path::new(dir_event.as_str()), RecursiveMode::Recursive);
+                            }
+                            None => { break; }
                         }
                     }
                 });
@@ -209,10 +217,10 @@ impl DirectoryList {
 
     fn register_size_watcher(&mut self, data: DirEntryData) {
         if self.dir_size_rx.is_none() {
-           // construct a new channel
-           let (tx, rx): (Sender<SizeNotification>, Receiver<SizeNotification>) = channel();
-           self.dir_size_tx = Some(tx.clone());
-           self.dir_size_rx = Some(rx);
+            // construct a new channel
+            let (tx, rx): (mpsc::Sender<SizeNotification>, mpsc::Receiver<SizeNotification>) = mpsc::channel(20);
+            self.dir_size_tx = Some(tx.clone());
+            self.dir_size_rx = Some(rx);
         }
 
         let parent_dir = self.dir.clone();
@@ -225,7 +233,7 @@ impl DirectoryList {
                 tx.send(SizeNotification {
                     name: data.name.clone(),
                     size: dir_size,
-                }).expect(format!("Error sending SizeNotification for {}", data.name).as_str());
+                });
             });
         }
     }
@@ -415,15 +423,24 @@ impl App {
     /// Do something every so often
     fn on_tick(&mut self) {
         // check if filesystem has changed
-        if let Some(rx) = &self.dir_list.watcher_rx {
-            if let Ok(event) = rx.try_recv() {
-                self.add_event(format!("FS event: {:?}", event.paths));
-                self.dir_list.smart_refresh();
+        let mut got_fs_event = false;
+        loop {
+            if let Some(rx) = self.dir_list.watcher_rx.as_mut() {
+                if let Ok(event) = rx.try_recv() {
+                    got_fs_event = true;
+                    self.add_event(format!("FS ev: {:?}:{:?}", event.kind, event.paths));
+                } else {
+                    break;
+                }
             }
+        }
+        if got_fs_event {
+            self.dir_list.smart_refresh();
+            self.add_event("FS ev: calling smart_refresh()".to_string());
         }
         // check for size notifications
         loop {
-            if let Some(rx) = &self.dir_list.dir_size_rx {
+            if let Some(rx) = self.dir_list.dir_size_rx.as_mut() {
                 if let Ok(size_notify) = rx.try_recv() {
                     self.add_event(format!("Directory size computed for: {}", size_notify.name));
                     for item in &mut self.dir_list.items {
