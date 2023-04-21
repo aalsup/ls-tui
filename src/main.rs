@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, time::{Duration, Instant}};
+use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, thread, time::{Duration, Instant}};
 use std::fs::{FileType, Permissions};
 use std::time::SystemTime;
 use std::os::macos::fs::MetadataExt;
@@ -230,7 +230,8 @@ impl DirectoryList {
         let parent_dir = self.dir.clone();
         if let Some(tx) = &self.dir_size_tx {
             let tx = tx.clone();
-            tokio::spawn(async move {
+            // execute the expensive `get_size()` in a separate thread (not within the tokio executor)
+            thread::spawn(move || {
                 let cur_path = Path::new(parent_dir.as_str());
                 let file_path = cur_path.join(&data.name).canonicalize().unwrap();
                 let dir_size = get_size(file_path).unwrap_or(0);
@@ -421,6 +422,8 @@ impl App {
     fn set_dir(&mut self, new_dir: String) {
         self.dir = Path::new(new_dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
         self.dir_list.dir = self.dir.clone();
+
+        // TODO: cancel any existing threads spawned by `register_size_watcher()`
         let _result = self.dir_list.refresh();
         let _result = self.dir_list.watch();
     }
