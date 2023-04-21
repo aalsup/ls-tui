@@ -1,16 +1,14 @@
 use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, time::{Duration, Instant}};
 use std::fs::{FileType, Permissions};
-use std::io::Write;
+use std::time::SystemTime;
+use std::os::macos::fs::MetadataExt;
+use std::sync::mpsc;
 //use std::sync::mpsc::{channel, Receiver, Sender};
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
-use std::os::macos::fs::MetadataExt;
 
 use unix_permissions_ext::UNIXPermissionsExt;
-
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
 
 use byte_unit::Byte;
 use clap::Parser;
@@ -19,7 +17,6 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use crossterm::terminal::size;
 use fs_extra::dir::get_size;
 use thiserror::Error;
 use strum_macros::EnumIter;
@@ -113,6 +110,7 @@ struct DirEntryData {
     uid: u32,
     gid: u32,
     permissions: Permissions,
+    modified: SystemTime,
 }
 
 #[derive(Debug)]
@@ -137,6 +135,7 @@ impl From<DirEntry> for DirEntryData {
         let uid = meta.st_uid();
         let gid = meta.st_gid();
         let permissions = meta.permissions();
+        let modified = meta.modified().unwrap();
         DirEntryData {
             name: file_name,
             file_type: file_type,
@@ -144,6 +143,7 @@ impl From<DirEntry> for DirEntryData {
             uid: uid,
             gid: gid,
             permissions: permissions,
+            modified: modified,
         }
     }
 }
@@ -178,37 +178,39 @@ impl DirectoryList {
         match &self.watcher_tx {
             Some(watcher_tx) => {
                 // send the new directory to the watcher thread
-                watcher_tx.send(self.dir.clone());
+                let new_dir = self.dir.clone();
+                let tx = watcher_tx.clone();
+                let _result = tx.send(new_dir);
             }
             None => {
                 let dir = self.dir.clone();
-                let (dir_tx, mut dir_rx): (mpsc::Sender<String>, mpsc::Receiver<String>) = mpsc::channel(1);
+                let (dir_tx, dir_rx): (mpsc::Sender<String>, mpsc::Receiver<String>) = mpsc::channel();
                 // this is used to send updates to the watcher
                 self.watcher_tx = Some(dir_tx);
                 // this is used to receive updates from the watcher
-                let (watching_tx, watching_rx): (mpsc::Sender<Event>, mpsc::Receiver<Event>) = mpsc::channel(10);
+                let (watching_tx, watching_rx): (mpsc::Sender<Event>, mpsc::Receiver<Event>) = mpsc::channel();
                 self.watcher_rx = Some(watching_rx);
                 tokio::spawn(async move {
                     let mut watcher = notify::recommended_watcher(move |res| {
                         match res {
                             Ok(event) => {
-                                watching_tx.send(event);
+                                let _result = watching_tx.send(event);
                             }
                             Err(_) => {}
                         }
                     }).unwrap();
-                    watcher.watch(Path::new(dir.as_str()), RecursiveMode::NonRecursive);
+                    let _result = watcher.watch(Path::new(dir.as_str()), RecursiveMode::NonRecursive);
                     let mut dir = dir.clone();
                     loop {
-                        let dir_event = dir_rx.recv().await;
+                        let dir_event = dir_rx.try_recv();
                         match dir_event {
-                            Some(dir_event) => {
+                            Ok(dir_event) => {
                                 // changed directory to watch
-                                watcher.unwatch(Path::new(dir.as_str()));
+                                let _result = watcher.unwatch(Path::new(dir.as_str()));
                                 dir = dir_event.clone();
-                                watcher.watch(Path::new(dir_event.as_str()), RecursiveMode::Recursive);
+                                let _result = watcher.watch(Path::new(dir_event.as_str()), RecursiveMode::Recursive);
                             }
-                            None => { break; }
+                            Err(_) => { break; }
                         }
                     }
                 });
@@ -220,7 +222,7 @@ impl DirectoryList {
     fn register_size_watcher(&mut self, data: DirEntryData) {
         if self.dir_size_rx.is_none() {
             // construct a new channel
-            let (tx, rx): (mpsc::Sender<SizeNotification>, mpsc::Receiver<SizeNotification>) = mpsc::channel(20);
+            let (tx, rx): (mpsc::Sender<SizeNotification>, mpsc::Receiver<SizeNotification>) = mpsc::channel();
             self.dir_size_tx = Some(tx);
             self.dir_size_rx = Some(rx);
         }
@@ -232,10 +234,12 @@ impl DirectoryList {
                 let cur_path = Path::new(parent_dir.as_str());
                 let file_path = cur_path.join(&data.name).canonicalize().unwrap();
                 let dir_size = get_size(file_path).unwrap_or(0);
-                tx.send(SizeNotification {
-                    name: data.name.clone(),
-                    size: dir_size,
-                }).await.unwrap();
+                let _result = tx.send(
+                    SizeNotification {
+                        name: data.name.clone(),
+                        size: dir_size,
+                    }
+                );
             });
         }
     }
@@ -282,7 +286,7 @@ impl DirectoryList {
             (DirectoryListItem::Entry(_), DirectoryListItem::ParentDir(_)) => Ordering::Greater,
             (DirectoryListItem::Entry(a), DirectoryListItem::Entry(b)) => {
                 #[allow(unused_assignments)]
-                    let mut sort_by_direction = SortByDirection::default();
+                let mut sort_by_direction = SortByDirection::default();
                 let mut retval = match sort_by {
                     SortBy::TypeName(direction) => {
                         sort_by_direction = direction;
@@ -310,8 +314,7 @@ impl DirectoryList {
                     }
                     SortBy::DateTime(direction) => {
                         sort_by_direction = direction;
-                        todo!();
-                        // a.metadata().unwrap().modified().unwrap().cmp(&b.metadata().unwrap().modified().unwrap())
+                        a.modified.cmp(&b.modified)
                     }
                 };
                 // reverse the order?
@@ -418,46 +421,49 @@ impl App {
     fn set_dir(&mut self, new_dir: String) {
         self.dir = Path::new(new_dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
         self.dir_list.dir = self.dir.clone();
-        self.dir_list.refresh();
-        self.dir_list.watch();
+        let _result = self.dir_list.refresh();
+        let _result = self.dir_list.watch();
     }
 
     /// Do something every so often
     fn on_tick(&mut self) {
         // check if filesystem has changed
         let mut got_fs_event = false;
+        // drain any messages in the channel
         loop {
             if let Some(rx) = self.dir_list.watcher_rx.as_mut() {
-                if let Ok(event) = rx.try_recv() {
-                    got_fs_event = true;
-                    self.add_event(format!("FS ev: {:?}:{:?}", event.kind, event.paths));
-                } else {
-                    break;
+                match rx.try_recv() {
+                    Ok(event) => {
+                        got_fs_event = true;
+                        self.add_event(format!("FS ev: {:?}:{:?}", event.kind, event.paths));
+                    },
+                    Err(_) => { break; }
                 }
             }
         }
         if got_fs_event {
-            self.dir_list.smart_refresh();
+            let _result = self.dir_list.smart_refresh();
             self.add_event("FS ev: calling smart_refresh()".to_string());
         }
         // check for size notifications
         loop {
             if let Some(rx) = self.dir_list.dir_size_rx.as_mut() {
-                if let Ok(size_notify) = rx.try_recv() {
-                    self.add_event(format!("Directory size computed for: {}", size_notify.name));
-                    for item in &mut self.dir_list.items {
-                        match item {
-                            DirectoryListItem::Entry(e) => {
-                                if e.name == size_notify.name {
-                                    e.size = Some(size_notify.size);
-                                    break;
+                match rx.try_recv() {
+                    Ok(size_notify) => {
+                        self.add_event(format!("Directory size computed for: {}", size_notify.name));
+                        for item in &mut self.dir_list.items {
+                            match item {
+                                DirectoryListItem::Entry(e) => {
+                                    if e.name == size_notify.name {
+                                        e.size = Some(size_notify.size);
+                                        break;
+                                    }
                                 }
+                                DirectoryListItem::ParentDir(_) => {}
                             }
-                            DirectoryListItem::ParentDir(_) => {}
                         }
-                    }
-                } else {
-                    break;
+                    },
+                    Err(_) => { break; }
                 }
             }
         }
@@ -633,7 +639,7 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
                         } else {
                             let cur_path = Path::new(&app.dir);
                             let entry_path = cur_path.join(&entry.name);
-                            opener::open(entry_path.as_path());
+                            let _result = opener::open(entry_path.as_path());
                         }
                     }
                 }
@@ -725,7 +731,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                     if item.file_type.is_symlink() {
                         style = link_style;
                     }
-                    let mut filesize_str = {
+                    let filesize_str = {
                         if let Some(size) = item.size {
                             let byte = Byte::from_bytes(size.into());
                             let adjusted_byte = byte.get_appropriate_unit(false);
