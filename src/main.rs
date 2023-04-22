@@ -1,6 +1,6 @@
-use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, thread, time::{Duration, Instant}};
+use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, thread};
 use std::fs::{FileType, Permissions};
-use std::time::SystemTime;
+use std::time::{SystemTime, Duration, Instant};
 use std::os::macos::fs::MetadataExt;
 use std::sync::mpsc::{Sender, Receiver, channel};
 //use std::sync::mpsc::{channel, Receiver, Sender};
@@ -172,6 +172,8 @@ struct DirectoryList {
     dir_size_tx: Option<Sender<SizeNotification>>,
     // dir size sender
     dir_size_rx: Option<Receiver<SizeNotification>>,
+    // event tx
+    event_tx: Sender<String>,
 }
 
 impl DirectoryList {
@@ -229,26 +231,33 @@ impl DirectoryList {
         }
 
         let parent_dir = self.dir.clone();
-        if let Some(tx) = &self.dir_size_tx {
-            let tx = tx.clone();
+        let event_tx = self.event_tx.clone();
+        if let Some(dir_size_tx) = &self.dir_size_tx {
+            let dir_size_tx = dir_size_tx.clone();
             // execute the expensive `get_size()` in a separate thread (not within the tokio executor)
             thread::spawn(move || {
                 let cur_path = Path::new(parent_dir.as_str());
                 let file_path = cur_path.join(&data.name).canonicalize()
                     .expect("unable to canonicalize path for getting dir_size");
+                let start = Instant::now();
                 let dir_size = get_size(file_path).unwrap_or(0);
-                let _result = tx.send(
+                let duration = start.elapsed();
+                dir_size_tx.send(
                     SizeNotification {
                         name: data.name.clone(),
                         size: dir_size,
                     }
-                );
+                ).expect("unable to send dir_size_tx from thread");
+                event_tx.send(format!("Dir size for {} in {:?}", data.name.clone(), duration))
+                    .expect("unable to send event_tx for directory size");
             });
         }
     }
 
     fn smart_refresh(&mut self) -> Result<(), io::Error> {
         // figure out how to only touch things that have changed since the previous read
+        self.event_tx.send("smart_refresh() called".to_string())
+            .expect("unable to send smart_refresh() event");
         Ok(())
     }
 
@@ -389,12 +398,18 @@ struct App {
     dir_list: DirectoryList,
     events: Vec<String>,
     event_list_state: ListState,
+    event_rx: Receiver<String>,
+    event_tx: Sender<String>,
     file_snippet: Vec<String>,
     sort_popup: bool,
 }
 
 impl App {
     fn new(dir_name: String) -> App {
+        // create the event channel
+        let (event_tx, event_rx) : (Sender<String>, Receiver<String>) = channel();
+
+        // create the app
         let mut app = App {
             dir: dir_name.clone(),
             dir_list: DirectoryList {
@@ -411,9 +426,12 @@ impl App {
                 },
                 dir_size_rx: None,
                 dir_size_tx: None,
+                event_tx: event_tx.clone(),
             },
             events: vec![],
             event_list_state: ListState::default(),
+            event_tx: event_tx,
+            event_rx: event_rx,
             file_snippet: vec![],
             sort_popup: false,
         };
@@ -438,13 +456,14 @@ impl App {
     fn on_tick(&mut self) {
         // check if filesystem has changed
         let mut got_fs_event = false;
-        // drain any messages in the channel
+        // drain the dir_list.watcher_rx channel
         loop {
             if let Some(rx) = self.dir_list.watcher_rx.as_mut() {
                 match rx.try_recv() {
                     Ok(event) => {
                         got_fs_event = true;
-                        self.add_event(format!("FS ev: {:?}:{:?}", event.kind, event.paths));
+                        self.event_tx.send(format!("FS ev: {:?}:{:?}", event.kind, event.paths))
+                            .expect("unable to send event_tx in on_tick()");
                     },
                     Err(_) => { break; }
                 }
@@ -452,14 +471,12 @@ impl App {
         }
         if got_fs_event {
             let _result = self.dir_list.smart_refresh();
-            self.add_event("FS ev: calling smart_refresh()".to_string());
         }
         // check for size notifications
         loop {
             if let Some(rx) = self.dir_list.dir_size_rx.as_mut() {
                 match rx.try_recv() {
                     Ok(size_notify) => {
-                        self.add_event(format!("Directory size computed for: {}", size_notify.name));
                         for item in &mut self.dir_list.items {
                             match item {
                                 DirectoryListItem::Entry(e) => {
@@ -474,6 +491,15 @@ impl App {
                     },
                     Err(_) => { break; }
                 }
+            }
+        }
+        // check for events
+        loop {
+            match self.event_rx.try_recv() {
+                Ok(event_msg) => {
+                    self.add_event(event_msg);
+                },
+                Err(_) => { break; }
             }
         }
     }
@@ -549,9 +575,10 @@ impl App {
                                         .expect("unable to add line to snippet"));
                                 }
                             }
-                            self.add_event(format!("File: {}, Type: {}",
+                            self.event_tx.send(format!("File: {}, Type: {}",
                                                    entry.name,
-                                                   mime_type.to_string()));
+                                                   mime_type.to_string()))
+                                .expect("unable to send event_tx for load_file_snippet()");
                         }
                     }
                 }
