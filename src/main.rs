@@ -1,14 +1,16 @@
-use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{BufRead, BufReader}, path::Path, thread};
-use std::fs::{FileType, Permissions};
-use std::time::{SystemTime, Duration, Instant};
-use std::os::macos::fs::MetadataExt;
-use std::sync::mpsc::{Sender, Receiver, channel};
-//use std::sync::mpsc::{channel, Receiver, Sender};
+use std::{io, io::{BufRead, BufReader}};
+use std::{fs, fs::{DirEntry, File, FileType, Permissions}};
+use std::cmp::Ordering;
+use std::error::Error;
+use std::fmt;
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
-
-use unix_permissions_ext::UNIXPermissionsExt;
+use std::os::macos::fs::MetadataExt;
+use std::path::Path;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
 use byte_unit::Byte;
 use clap::Parser;
@@ -18,19 +20,20 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use fs_extra::dir::get_size;
-use thiserror::Error;
+use notify::{RecursiveMode, Watcher};
+use notify::event::Event;
 use strum_macros::EnumIter;
+use thiserror::Error;
 use tui::{
     backend::{Backend, CrosstermBackend},
+    Frame,
     layout::{Alignment, Constraint, Corner, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Span, Spans},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap},
-    Frame, Terminal,
+    Terminal,
+    text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap},
 };
+use unix_permissions_ext::UNIXPermissionsExt;
 use users::get_user_by_uid;
-use notify::{Watcher, RecursiveMode};
-use notify::event::Event;
 
 const MAX_EVENTS: usize = 5;
 const TICK_RATE_MILLIS: u64 = 250;
@@ -298,7 +301,7 @@ impl DirectoryList {
             (DirectoryListItem::Entry(_), DirectoryListItem::ParentDir(_)) => Ordering::Greater,
             (DirectoryListItem::Entry(a), DirectoryListItem::Entry(b)) => {
                 #[allow(unused_assignments)]
-                let mut sort_by_direction = SortByDirection::default();
+                    let mut sort_by_direction = SortByDirection::default();
                 let mut retval = match sort_by {
                     SortBy::TypeName(direction) => {
                         sort_by_direction = direction;
@@ -407,7 +410,7 @@ struct App {
 impl App {
     fn new(dir_name: String) -> App {
         // create the event channel
-        let (event_tx, event_rx) : (Sender<String>, Receiver<String>) = channel();
+        let (event_tx, event_rx): (Sender<String>, Receiver<String>) = channel();
 
         // create the app
         let mut app = App {
@@ -464,7 +467,7 @@ impl App {
                         got_fs_event = true;
                         self.event_tx.send(format!("FS ev: {:?}:{:?}", event.kind, event.paths))
                             .expect("unable to send event_tx in on_tick()");
-                    },
+                    }
                     Err(_) => { break; }
                 }
             }
@@ -488,7 +491,7 @@ impl App {
                                 DirectoryListItem::ParentDir(_) => {}
                             }
                         }
-                    },
+                    }
                     Err(_) => { break; }
                 }
             }
@@ -498,7 +501,7 @@ impl App {
             match self.event_rx.try_recv() {
                 Ok(event_msg) => {
                     self.add_event(event_msg);
-                },
+                }
                 Err(_) => { break; }
             }
         }
@@ -576,8 +579,8 @@ impl App {
                                 }
                             }
                             self.event_tx.send(format!("File: {}, Type: {}",
-                                                   entry.name,
-                                                   mime_type.to_string()))
+                                                       entry.name,
+                                                       mime_type.to_string()))
                                 .expect("unable to send event_tx for load_file_snippet()");
                         }
                     }
