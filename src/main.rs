@@ -2,7 +2,7 @@ use std::{cmp::Ordering, error::Error, fmt, fs, fs::{DirEntry, File}, io, io::{B
 use std::fs::{FileType, Permissions};
 use std::time::SystemTime;
 use std::os::macos::fs::MetadataExt;
-use std::sync::mpsc;
+use std::sync::mpsc::{Sender, Receiver, channel};
 //use std::sync::mpsc::{channel, Receiver, Sender};
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
@@ -39,7 +39,7 @@ const SNIPPET_LINES: usize = 50;
 #[derive(Error, Debug)]
 pub enum AppError {
     #[error("unable to access directory")]
-    DirListError(#[from] io::Error),
+    IoError(#[from] io::Error),
     #[error("unable to watch directory for changes")]
     WatchError,
 }
@@ -121,21 +121,22 @@ struct SizeNotification {
 
 impl From<DirEntry> for DirEntryData {
     fn from(dir_entry: DirEntry) -> Self {
-        let file_name = dir_entry.file_name().into_string().unwrap();
-        let file_type = dir_entry.file_type().unwrap();
+        let file_name = dir_entry.file_name().into_string()
+            .expect("Unable to get filename from DirEntry");
+        let file_type = dir_entry.file_type()
+            .expect("Unable to get file_type from DirEntry");
+        let meta = dir_entry.metadata()
+            .expect("Unable to get metadata from DirEntry");
         let mut file_size: Option<u64> = None;
         if file_type.is_file() {
             // only get file sizes now; otherwise, async via `register_size_watcher()`
-            file_size = match dir_entry.metadata() {
-                Ok(metadata) => { Some(metadata.len()) }
-                Err(_) => { None }
-            };
+            file_size = Some(meta.len());
         }
-        let meta = dir_entry.metadata().unwrap();
         let uid = meta.st_uid();
         let gid = meta.st_gid();
         let permissions = meta.permissions();
-        let modified = meta.modified().unwrap();
+        let modified = meta.modified()
+            .expect("Unable to get modified from DirEntry");
         DirEntryData {
             name: file_name,
             file_type: file_type,
@@ -164,13 +165,13 @@ struct DirectoryList {
     sort_by_list_state: ListState,
     state: TableState,
     items: Vec<DirectoryListItem>,
-    watcher_tx: Option<mpsc::Sender<String>>,
+    watcher_tx: Option<Sender<String>>,
     // watcher should switch dir
-    watcher_rx: Option<mpsc::Receiver<Event>>,
+    watcher_rx: Option<Receiver<Event>>,
     // watched dir has changed
-    dir_size_tx: Option<mpsc::Sender<SizeNotification>>,
+    dir_size_tx: Option<Sender<SizeNotification>>,
     // dir size sender
-    dir_size_rx: Option<mpsc::Receiver<SizeNotification>>,   // dir size receiver
+    dir_size_rx: Option<Receiver<SizeNotification>>,
 }
 
 impl DirectoryList {
@@ -184,11 +185,11 @@ impl DirectoryList {
             }
             None => {
                 let dir = self.dir.clone();
-                let (dir_tx, dir_rx): (mpsc::Sender<String>, mpsc::Receiver<String>) = mpsc::channel();
+                let (dir_tx, dir_rx): (Sender<String>, Receiver<String>) = channel();
                 // this is used to send updates to the watcher
                 self.watcher_tx = Some(dir_tx);
                 // this is used to receive updates from the watcher
-                let (watching_tx, watching_rx): (mpsc::Sender<Event>, mpsc::Receiver<Event>) = mpsc::channel();
+                let (watching_tx, watching_rx): (Sender<Event>, Receiver<Event>) = channel();
                 self.watcher_rx = Some(watching_rx);
                 tokio::spawn(async move {
                     let mut watcher = notify::recommended_watcher(move |res| {
@@ -198,7 +199,7 @@ impl DirectoryList {
                             }
                             Err(_) => {}
                         }
-                    }).unwrap();
+                    }).expect("unable to create recommended_watcher");
                     let _result = watcher.watch(Path::new(dir.as_str()), RecursiveMode::NonRecursive);
                     let mut dir = dir.clone();
                     loop {
@@ -222,7 +223,7 @@ impl DirectoryList {
     fn register_size_watcher(&mut self, data: DirEntryData) {
         if self.dir_size_rx.is_none() {
             // construct a new channel
-            let (tx, rx): (mpsc::Sender<SizeNotification>, mpsc::Receiver<SizeNotification>) = mpsc::channel();
+            let (tx, rx): (Sender<SizeNotification>, Receiver<SizeNotification>) = channel();
             self.dir_size_tx = Some(tx);
             self.dir_size_rx = Some(rx);
         }
@@ -233,7 +234,8 @@ impl DirectoryList {
             // execute the expensive `get_size()` in a separate thread (not within the tokio executor)
             thread::spawn(move || {
                 let cur_path = Path::new(parent_dir.as_str());
-                let file_path = cur_path.join(&data.name).canonicalize().unwrap();
+                let file_path = cur_path.join(&data.name).canonicalize()
+                    .expect("unable to canonicalize path for getting dir_size");
                 let dir_size = get_size(file_path).unwrap_or(0);
                 let _result = tx.send(
                     SizeNotification {
@@ -255,7 +257,7 @@ impl DirectoryList {
         // read all the items in the directory
         self.items = fs::read_dir(self.dir.clone())?
             .into_iter()
-            .map(|x| x.unwrap())
+            .map(|x| x.expect("unable to get DirEntry from iterator"))
             .map(|x| {
                 let data: DirEntryData = x.into();
                 if data.file_type.is_dir() || data.file_type.is_symlink() {
@@ -420,7 +422,11 @@ impl App {
     }
 
     fn set_dir(&mut self, new_dir: String) {
-        self.dir = Path::new(new_dir.as_str()).canonicalize().unwrap().to_str().unwrap().to_string();
+        self.dir = Path::new(new_dir.as_str()).canonicalize()
+            .expect("unable to canonicalize new directory")
+            .to_str()
+            .expect("unable to convert new directory to string")
+            .to_string();
         self.dir_list.dir = self.dir.clone();
 
         // TODO: cancel any existing threads spawned by `register_size_watcher()`
@@ -481,10 +487,17 @@ impl App {
         let chg_path = cur_path.join(chg_dir).canonicalize()?;
 
         // update the current info
-        self.set_dir(chg_path.to_str().unwrap().to_string());
+        self.set_dir(chg_path.to_str()
+            .expect("unable to convert chg_path to string")
+            .to_string());
 
-        let cur_path_str = cur_path.to_str().unwrap().to_string();
-        let chg_path_str = chg_path.to_str().unwrap().to_string();
+        let cur_path_str = cur_path.to_str()
+            .expect("unable to convert cur_path to string")
+            .to_string();
+        let chg_path_str = chg_path.to_str()
+            .expect("unable to convert chg_path to string")
+            .to_string();
+
         if cur_path_str.contains(&chg_path_str) {
             // going to parent dir, try to select the proper child
             if let Some(basename) = cur_path_str.strip_prefix(chg_path_str.as_str()) {
@@ -532,7 +545,8 @@ impl App {
                                 let reader = BufReader::new(file);
                                 for (index, line) in reader.lines().enumerate() {
                                     if index > SNIPPET_LINES { break; }
-                                    self.file_snippet.push(line.unwrap());
+                                    self.file_snippet.push(line
+                                        .expect("unable to add line to snippet"));
                                 }
                             }
                             self.add_event(format!("File: {}, Type: {}",
@@ -592,7 +606,11 @@ fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
             app.sort_popup = false;
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
-            app.dir_list.sort_by = SortBy::all()[app.dir_list.sort_by_list_state.selected().unwrap()].clone();
+            app.dir_list.sort_by = SortBy::all()[
+                app.dir_list.sort_by_list_state
+                    .selected()
+                    .expect("unable to identify selected sort_by item")
+                ].clone();
             app.sort_popup = false;
         }
         KeyCode::Down | KeyCode::Char('j') => {
@@ -745,7 +763,8 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
                     };
                     let mut user = item.uid.to_string();
                     if let Some(uname) = get_user_by_uid(item.uid) {
-                        user = uname.name().to_os_string().into_string().unwrap();
+                        user = uname.name().to_os_string().into_string()
+                            .expect("unable to convert username to string");
                     }
                     let gid = item.gid.to_string();
                     let perms = item.permissions.clone();
