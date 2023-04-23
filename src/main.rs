@@ -1,13 +1,9 @@
-mod dir_list;
-
 use std::{io, io::{BufRead, BufReader}};
-use std::fs::File;
 use std::error::Error;
+use std::fs::File;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
-
-use dir_list::*;
 
 use byte_unit::Byte;
 use clap::Parser;
@@ -23,10 +19,14 @@ use tui::{
     layout::{Alignment, Constraint, Corner, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     Terminal,
-    text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap},
+    text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
 };
 use unix_permissions_ext::UNIXPermissionsExt;
 use users::get_user_by_uid;
+
+use dir_list::*;
+
+mod dir_list;
 
 const MAX_EVENTS: usize = 5;
 const TICK_RATE_MILLIS: u64 = 250;
@@ -64,24 +64,9 @@ impl App {
         let (event_tx, event_rx): (Sender<String>, Receiver<String>) = channel();
 
         // create the app
-        let mut app = App {
+        let mut app = Self {
             dir: dir_name.clone(),
-            dir_list: DirectoryList {
-                dir: dir_name.clone(),
-                state: TableState::default(),
-                items: vec![],
-                watcher_tx: None,
-                watcher_rx: None,
-                sort_by: SortBy::TypeName(SortByDirection::Asc),
-                sort_by_list_state: {
-                    let mut state = ListState::default();
-                    state.select(Some(0));
-                    state
-                },
-                dir_size_rx: None,
-                dir_size_tx: None,
-                event_tx: event_tx.clone(),
-            },
+            dir_list: DirectoryList::new(dir_name.clone(), event_tx.clone()),
             events: vec![],
             event_list_state: ListState::default(),
             event_tx: event_tx,

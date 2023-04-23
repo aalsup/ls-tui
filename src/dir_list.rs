@@ -141,6 +141,25 @@ pub struct DirectoryList {
 }
 
 impl DirectoryList {
+    pub(crate) fn new(dir_name: String, event_tx: Sender<String>) -> Self {
+        Self {
+            dir: dir_name,
+            state: TableState::default(),
+            items: vec![],
+            watcher_tx: None,
+            watcher_rx: None,
+            sort_by: SortBy::TypeName(SortByDirection::Asc),
+            sort_by_list_state: {
+                let mut state = ListState::default();
+                state.select(Some(0));
+                state
+            },
+            dir_size_rx: None,
+            dir_size_tx: None,
+            event_tx: event_tx,
+        }
+    }
+
     pub(crate) fn watch(&mut self) -> Result<(), AppError> {
         match &self.watcher_tx {
             Some(watcher_tx) => {
