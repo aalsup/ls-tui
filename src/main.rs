@@ -2,7 +2,7 @@ use std::{io, io::{BufRead, BufReader}};
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -25,7 +25,7 @@ use dir_list::*;
 
 mod dir_list;
 
-const MAX_EVENTS: usize = 5;
+const MAX_EVENTS: usize = 7;
 const TICK_RATE_MILLIS: u64 = 250;
 const SNIPPET_LINES: usize = 50;
 
@@ -66,8 +66,8 @@ impl App {
             dir_list: DirectoryList::new(dir_name.clone(), event_tx.clone()),
             events: vec![],
             event_list_state: ListState::default(),
-            event_tx: event_tx,
-            event_rx: event_rx,
+            event_tx,
+            event_rx,
             file_snippet: vec![],
             sort_popup: false,
         };
@@ -83,25 +83,29 @@ impl App {
             .to_string();
         self.dir_list.dir = self.dir.clone();
 
-        // TODO: cancel any existing threads spawned by `register_size_watcher()`
-        let _result = self.dir_list.refresh();
-        let _result = self.dir_list.watch();
+        self.dir_list.refresh().expect("unable to refresh");
+        self.dir_list.watch().expect("unable to watch");
     }
 
     /// Do something every so often
     fn on_tick(&mut self) {
         // check if filesystem has changed
         let mut got_fs_event = false;
-        // drain the dir_list.watcher_rx channel
+        // drain the dir_watch channel
         loop {
-            if let Some(rx) = self.dir_list.watcher_rx.as_mut() {
+            if let Some(rx) = self.dir_list.dir_watch_rx.as_mut() {
                 match rx.try_recv() {
                     Ok(event) => {
                         got_fs_event = true;
                         self.event_tx.send(format!("FS ev: {:?}:{:?}", event.kind, event.paths))
                             .expect("unable to send event_tx in on_tick()");
+                    },
+                    Err(TryRecvError::Empty) => {
+                        break;
+                    },
+                    Err(TryRecvError::Disconnected) => {
+                        break;
                     }
-                    Err(_) => { break; }
                 }
             }
         }
@@ -124,8 +128,13 @@ impl App {
                                 DirectoryListItem::ParentDir(_) => {}
                             }
                         }
+                    },
+                    Err(TryRecvError::Empty) => {
+                        break;
+                    },
+                    Err(TryRecvError::Disconnected) => {
+                        break;
                     }
-                    Err(_) => { break; }
                 }
             }
         }
@@ -134,8 +143,13 @@ impl App {
             match self.event_rx.try_recv() {
                 Ok(event_msg) => {
                     self.add_event(event_msg);
+                },
+                Err(TryRecvError::Empty) => {
+                    break;
+                },
+                Err(TryRecvError::Disconnected) => {
+                    break;
                 }
-                Err(_) => { break; }
             }
         }
     }
@@ -231,8 +245,7 @@ enum KeyInputResult {
     Stop,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     // setup terminal

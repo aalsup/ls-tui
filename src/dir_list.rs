@@ -1,4 +1,4 @@
-use std::{fmt, fs, io, thread};
+use std::{fmt, fs, io, thread, time};
 use std::cmp::Ordering;
 use std::fs::{DirEntry, FileType, Permissions};
 #[cfg(target_os = "linux")]
@@ -6,7 +6,7 @@ use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt;
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Instant, SystemTime};
 
 use byte_unit::Byte;
@@ -107,18 +107,17 @@ impl From<DirEntry> for DirEntryData {
             .expect("Unable to get modified from DirEntry");
         DirEntryData {
             name: file_name,
-            file_type: file_type,
+            file_type,
             size: file_size,
-            uid: uid,
-            gid: gid,
-            permissions: permissions,
-            modified: modified,
+            uid,
+            gid,
+            permissions,
+            modified,
         }
     }
 }
 
 impl From<DirectoryListItem> for Row<'_> {
-//impl From<DirectoryListItem> for Row<'static> {
     fn from(item: DirectoryListItem) -> Self {
         let style = Style::default();
         let dir_style = style.add_modifier(Modifier::BOLD);
@@ -192,12 +191,13 @@ pub struct DirectoryList {
     pub sort_by_list_state: ListState,
     pub state: TableState,
     pub items: Vec<DirectoryListItem>,
-    pub watcher_tx: Option<Sender<String>>,
-    // watcher should switch dir
-    pub watcher_rx: Option<Receiver<Event>>,
-    // watched dir has changed
+    // changing directory
+    pub dir_change_tx: Option<Sender<String>>,
+    // watched directory
+    pub dir_watch_tx: Option<Sender<Event>>,
+    pub dir_watch_rx: Option<Receiver<Event>>,
+    // dir size computed
     pub dir_size_tx: Option<Sender<SizeNotification>>,
-    // dir size sender
     pub dir_size_rx: Option<Receiver<SizeNotification>>,
     // event tx
     pub event_tx: Sender<String>,
@@ -209,8 +209,8 @@ impl DirectoryList {
             dir: dir_name,
             state: TableState::default(),
             items: vec![],
-            watcher_tx: None,
-            watcher_rx: None,
+            dir_change_tx: None,
+            dir_watch_tx: None,
             sort_by: SortBy::TypeName(SortByDirection::Asc),
             sort_by_list_state: {
                 let mut state = ListState::default();
@@ -219,48 +219,70 @@ impl DirectoryList {
             },
             dir_size_rx: None,
             dir_size_tx: None,
-            event_tx: event_tx,
+            event_tx,
+            dir_watch_rx: None,
         }
     }
 
     pub(crate) fn watch(&mut self) -> Result<(), AppError> {
-        match &self.watcher_tx {
-            Some(watcher_tx) => {
+        let event_tx2 = self.event_tx.clone();
+        event_tx2.send("watch() called".to_string())
+            .expect("unable to send event for watch()");
+        match &self.dir_change_tx {
+            Some(dir_change_tx) => {
                 // send the new directory to the watcher thread
                 let new_dir = self.dir.clone();
-                let tx = watcher_tx.clone();
-                let _result = tx.send(new_dir);
+                let dir_change_tx = dir_change_tx.clone();
+                dir_change_tx.send(new_dir)
+                    .expect("unable to send dir_change event");
             }
             None => {
                 let dir = self.dir.clone();
-                let (dir_tx, dir_rx): (Sender<String>, Receiver<String>) = channel();
-                // this is used to send updates to the watcher
-                self.watcher_tx = Some(dir_tx);
+                let (dir_change_tx, dir_change_rx): (Sender<String>, Receiver<String>) = channel();
+                self.dir_change_tx = Some(dir_change_tx.clone());
                 // this is used to receive updates from the watcher
-                let (watching_tx, watching_rx): (Sender<Event>, Receiver<Event>) = channel();
-                self.watcher_rx = Some(watching_rx);
-                tokio::spawn(async move {
+                let (dir_watch_tx, dir_watch_rx): (Sender<Event>, Receiver<Event>) = channel();
+                self.dir_watch_tx = Some(dir_watch_tx.clone());
+                self.dir_watch_rx = Some(dir_watch_rx);
+                let event_tx_copy = self.event_tx.clone();
+                thread::spawn(move || {
+                    event_tx_copy.send("new watch() thread created".to_string())
+                        .expect("Unable to send event for watch thread");
                     let mut watcher = notify::recommended_watcher(move |res| {
                         match res {
                             Ok(event) => {
-                                let _result = watching_tx.send(event);
+                                let _result = dir_watch_tx.send(event);
                             }
                             Err(_) => {}
                         }
                     }).expect("unable to create recommended_watcher");
-                    let _result = watcher.watch(Path::new(dir.as_str()), RecursiveMode::NonRecursive);
-                    let mut dir = dir.clone();
+                    watcher.watch(Path::new(dir.as_str()), RecursiveMode::NonRecursive)
+                        .expect("unable to watch dir");
+                    let mut cur_dir = dir.clone();
                     loop {
-                        let dir_event = dir_rx.try_recv();
+                        let dir_event = dir_change_rx.try_recv();
                         match dir_event {
-                            Ok(dir_event) => {
+                            Ok(new_dir) => {
+                                event_tx_copy.send("dir_event received".to_string())
+                                    .expect("unable to send event for dir_event");
                                 // changed directory to watch
-                                let _result = watcher.unwatch(Path::new(dir.as_str()));
-                                dir = dir_event.clone();
-                                let _result = watcher.watch(Path::new(dir_event.as_str()), RecursiveMode::Recursive);
+                                watcher.unwatch(Path::new(cur_dir.as_str()))
+                                    .expect("unable to unwatch dir");
+                                cur_dir = new_dir.clone();
+                                watcher.watch(Path::new(new_dir.as_str()), RecursiveMode::NonRecursive)
+                                    .expect("unable to watch new dir");
+                            },
+                            Err(TryRecvError::Disconnected) => {
+                                event_tx_copy.send("dir_change_rx disconnected".to_string())
+                                    .expect("unable to send error event");
+                                break;
+                            },
+                            Err(TryRecvError::Empty) => {
+                                // nothing in the channel
                             }
-                            Err(_) => { break; }
                         }
+                        let sleep_millis = time::Duration::from_millis(250);
+                        thread::sleep(sleep_millis);
                     }
                 });
             }
