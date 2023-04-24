@@ -8,8 +8,8 @@ use std::os::macos::fs::MetadataExt;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Instant, SystemTime};
-use byte_unit::Byte;
 
+use byte_unit::Byte;
 use fs_extra::dir::get_size;
 use notify::{Event, RecursiveMode, Watcher};
 use tui::style::{Modifier, Style};
