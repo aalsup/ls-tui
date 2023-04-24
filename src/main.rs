@@ -5,7 +5,6 @@ use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use byte_unit::Byte;
 use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent},
@@ -17,12 +16,10 @@ use tui::{
     backend::{Backend, CrosstermBackend},
     Frame,
     layout::{Alignment, Constraint, Corner, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     Terminal,
     text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
 };
-use unix_permissions_ext::UNIXPermissionsExt;
-use users::get_user_by_uid;
 
 use dir_list::*;
 
@@ -371,7 +368,7 @@ fn run_app<B: Backend>(
                     KeyInputResult::Stop => {
                         return Ok(());
                     }
-                    _ => {}
+                    KeyInputResult::Continue => {}
                 }
             }
         }
@@ -383,6 +380,8 @@ fn run_app<B: Backend>(
 }
 
 fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
+    let style = Style::default();
+
     // Create two chunks with equal horizontal screen space
     let h_panes = Layout::default()
         .direction(Direction::Horizontal)
@@ -394,63 +393,13 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
         .split(h_panes[1]);
 
-    let style = Style::default();
-    let dir_style = style.add_modifier(Modifier::BOLD);
-    let link_style = style.add_modifier(Modifier::ITALIC);
-
     let rows: Vec<Row> = app
         .dir_list
         .items
         .iter()
         .map(|item| {
-            match item {
-                DirectoryListItem::ParentDir(item) => {
-                    let file_name = item;
-                    Row::new(vec![file_name.as_str()]).style(dir_style)
-                }
-                DirectoryListItem::Entry(item) => {
-                    let file_name = item.name.clone();
-                    // determine the type of file (directory, symlink, etc.)
-                    let mut style = Style::default();
-                    if item.file_type.is_dir() {
-                        style = dir_style;
-                    }
-                    if item.file_type.is_symlink() {
-                        style = link_style;
-                    }
-                    let filesize_str = {
-                        if let Some(size) = item.size {
-                            let byte = Byte::from_bytes(size.into());
-                            let adjusted_byte = byte.get_appropriate_unit(false);
-                            adjusted_byte.to_string()
-                        } else {
-                            "?".to_string()
-                        }
-                    };
-                    let mut user = item.uid.to_string();
-                    if let Some(uname) = get_user_by_uid(item.uid) {
-                        user = uname.name().to_os_string().into_string()
-                            .expect("unable to convert username to string");
-                    }
-                    let gid = item.gid.to_string();
-                    let perms = item.permissions.clone();
-                    let perms_str = perms.stringify();
-                    let user_perms = perms_str[0..3].to_string();
-                    let group_perms = perms_str[3..6].to_string();
-                    let other_perms = perms_str[6..9].to_string();
-
-                    Row::new(vec![
-                        file_name,
-                        filesize_str,
-                        user,
-                        gid,
-                        user_perms,
-                        group_perms,
-                        other_perms,
-                    ])
-                        .style(style)
-                }
-            }
+            let row: Row = (*item).clone().into();
+            row
         })
         .collect();
 
