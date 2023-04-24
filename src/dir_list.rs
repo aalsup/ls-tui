@@ -225,9 +225,6 @@ impl DirectoryList {
     }
 
     pub(crate) fn watch(&mut self) -> Result<(), AppError> {
-        let event_tx2 = self.event_tx.clone();
-        event_tx2.send("watch() called".to_string())
-            .expect("unable to send event for watch()");
         match &self.dir_change_tx {
             Some(dir_change_tx) => {
                 // send the new directory to the watcher thread
@@ -244,10 +241,7 @@ impl DirectoryList {
                 let (dir_watch_tx, dir_watch_rx): (Sender<Event>, Receiver<Event>) = channel();
                 self.dir_watch_tx = Some(dir_watch_tx.clone());
                 self.dir_watch_rx = Some(dir_watch_rx);
-                let event_tx_copy = self.event_tx.clone();
                 thread::spawn(move || {
-                    event_tx_copy.send("new watch() thread created".to_string())
-                        .expect("Unable to send event for watch thread");
                     let mut watcher = notify::recommended_watcher(move |res| {
                         match res {
                             Ok(event) => {
@@ -263,8 +257,6 @@ impl DirectoryList {
                         let dir_event = dir_change_rx.try_recv();
                         match dir_event {
                             Ok(new_dir) => {
-                                event_tx_copy.send("dir_event received".to_string())
-                                    .expect("unable to send event for dir_event");
                                 // changed directory to watch
                                 watcher.unwatch(Path::new(cur_dir.as_str()))
                                     .expect("unable to unwatch dir");
@@ -272,14 +264,12 @@ impl DirectoryList {
                                 watcher.watch(Path::new(new_dir.as_str()), RecursiveMode::NonRecursive)
                                     .expect("unable to watch new dir");
                             },
-                            Err(TryRecvError::Disconnected) => {
-                                event_tx_copy.send("dir_change_rx disconnected".to_string())
-                                    .expect("unable to send error event");
-                                break;
-                            },
                             Err(TryRecvError::Empty) => {
                                 // nothing in the channel
                             }
+                            Err(TryRecvError::Disconnected) => {
+                                break;
+                            },
                         }
                         let sleep_millis = time::Duration::from_millis(250);
                         thread::sleep(sleep_millis);
@@ -326,6 +316,13 @@ impl DirectoryList {
         // figure out how to only touch things that have changed since the previous read
         self.event_tx.send("smart_refresh() called".to_string())
             .expect("unable to send smart_refresh() event");
+
+        // Create(File):["/path/filename"]
+        // Remove(File):["/path/filename"]
+        // Modify(Metadata(Extended)):["path/filename"]
+        // Modify(Name(Any)):["/path/filename"]
+        // Modify(Data(Content)):["/path/filename"]
+
         Ok(())
     }
 
