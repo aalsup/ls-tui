@@ -346,24 +346,22 @@ impl DirectoryList {
     pub(crate) fn smart_refresh(&mut self, fs_events: Vec<notify::Event>) -> Result<(), io::Error> {
         // Bug: `rm file1` generates both Create(File) and Remove(File) events.
 
-        // collect remove events
+        // collect remove events & filenames
+        let mut remove_files: Vec<&PathBuf> = vec![];
         let remove_events: &Vec<&notify::Event> = &fs_events
             .iter()
             .filter(|x| {
                 match x.kind {
-                    notify::EventKind::Remove(_) => true,
+                    notify::EventKind::Remove(_) => {
+                        for path in &x.paths {
+                            remove_files.push(path);
+                        }
+                        true
+                    },
                     _ => false
                 }
             })
             .collect();
-
-        // collect remove file names
-        let mut remove_files: Vec<&PathBuf> = vec![];
-        for remove_event in remove_events {
-            for path in &remove_event.paths {
-                remove_files.push(path);
-            }
-        }
 
         // collect modify events
         let modify_events: &Vec<&notify::Event> = &fs_events
