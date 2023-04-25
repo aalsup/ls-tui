@@ -1,6 +1,7 @@
 use std::{fmt, fs, io, thread, time};
 use std::cmp::Ordering;
 use std::fs::{DirEntry, FileType, Permissions};
+use std::ops::{Deref, DerefMut};
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
@@ -11,11 +12,13 @@ use std::time::{Instant, SystemTime};
 
 use byte_unit::Byte;
 use fs_extra::dir::get_size;
-use notify::{Watcher};
+use itertools::Itertools;
+use notify::{event, Watcher};
 use tui::style::{Modifier, Style};
 use tui::widgets::{ListState, Row, TableState};
 use unix_permissions_ext::UNIXPermissionsExt;
 use users::get_user_by_uid;
+use tracing::{info, Level};
 
 use crate::AppError;
 
@@ -345,123 +348,101 @@ impl DirectoryList {
 
     pub(crate) fn smart_refresh(&mut self, fs_events: Vec<notify::Event>) -> Result<(), io::Error> {
         // Bug: `rm file1` generates both Create(File) and Remove(File) events.
+        info!("smart_refresh() called with {} events", fs_events.len());
 
-        // collect remove events & filenames
+        let mut create_files: Vec<&PathBuf> = vec![];
+        let mut modify_files: Vec<&PathBuf> = vec![];
         let mut remove_files: Vec<&PathBuf> = vec![];
-        let remove_events: &Vec<&notify::Event> = &fs_events
-            .iter()
-            .filter(|x| {
-                match x.kind {
-                    notify::EventKind::Remove(_) => {
-                        for path in &x.paths {
-                            remove_files.push(path);
-                        }
-                        true
-                    },
-                    _ => false
-                }
-            })
-            .collect();
 
-        // collect modify events
-        let modify_events: &Vec<&notify::Event> = &fs_events
-            .iter()
-            .filter(|x| {
-                match x.kind {
-                    notify::EventKind::Modify(_) => true,
-                    _ => false
-                }
-            })
-            .collect();
-
-        // collect create events (that do not have remove events)
-        let create_events: Vec<&notify::Event> = fs_events
-            .iter()
-            .filter(|fs_event| {
-                match fs_event.kind {
-                    notify::EventKind::Create(create_event) => {
-                        match create_event {
-                            notify::event::CreateKind::File | notify::event::CreateKind::Folder => {
-                                let mut found = false;
-                                for create_path in &fs_event.paths {
-                                    if (*remove_files).contains(&create_path) {
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                !found
-                            },
-                            _ => false
-                        }
-                    }
-                    _ => false
-                }
-            })
-            .collect();
-
-        // process removed files
-        for fs_event in remove_events {
+        // collect filenames into proper vecs
+        for fs_event in &fs_events {
             match fs_event.kind {
-                notify::EventKind::Remove(remove_kind) => {
-                    match remove_kind {
-                        notify::event::RemoveKind::Any | notify::event::RemoveKind::Other => {
-                            // do nothing
-                        },
-                        notify::event::RemoveKind::File | notify::event::RemoveKind::Folder => {
-                            for remove_path in &fs_event.paths {
-                                let file_name = remove_path.file_name()
-                                    .expect("unable to extract file_name")
-                                    .to_str()
-                                    .expect("unable to convert file_name to str")
-                                    .to_string();
-                                self.items.retain(|x| {
-                                    match x {
-                                        DirectoryListItem::ParentDir(_) => true,
-                                        DirectoryListItem::Entry(e) => {
-                                            e.name != file_name
-                                        }
-                                    }
-                                })
-                            }
-                        }
+                notify::EventKind::Create(_) => {
+                    for path in &fs_event.paths {
+                        create_files.push(path);
+                    }
+                },
+                notify::EventKind::Modify(_) => {
+                    for path in &fs_event.paths {
+                        modify_files.push(path);
+                    }
+                },
+                notify::EventKind::Remove(_) => {
+                    for path in &fs_event.paths {
+                        remove_files.push(path);
                     }
                 },
                 _ => {}
             }
         }
 
-        // process new files
-        for fs_event in create_events {
-            match &fs_event.kind {
-                notify::EventKind::Create(create_kind) => {
-                    match create_kind {
-                        notify::event::CreateKind::Any | notify::event::CreateKind::Other => {
-                        },
-                        notify::event::CreateKind::File | notify::event::CreateKind::Folder => {
-                            let mut data_items: Vec<DirectoryListItem> = fs_event.paths
-                                .iter()
-                                .map(|x| {
-                                    let data: DirEntryData = (x as &PathBuf).into();
-                                    if data.file_type.is_dir() || data.file_type.is_symlink() {
-                                        self.register_size_calculator(data.clone());
-                                    }
-                                    data
-                                })
-                                .map(|x| DirectoryListItem::Entry(x))
-                                .collect();
-                            // TODO: getting duplicates: implement self.add_item() to prevent dupes.
-                            self.items.append(&mut data_items);
-                            self.items
-                                .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, self.sort_by.clone()));
+        // filter out create events that also have remove events
+        let start_count = create_files.len();
+        let create_files: Vec<&PathBuf> = create_files
+            .into_iter()
+            .filter(|create_path| {
+                !(*remove_files).contains(&create_path)
+            })
+            .unique()
+            .collect();
+        info!("create_files: initial={}, filtered={}", start_count, create_files.len());
+
+        // filter out modify events that also have remove events
+        let start_count = modify_files.len();
+        let modify_files: Vec<&PathBuf> = modify_files
+            .into_iter()
+            .filter(|modify_path| {
+                !(*remove_files).contains(&modify_path)
+            })
+            .unique()
+            .collect();
+        info!("modify_files: initial={}, filtered={}", start_count, modify_files.len());
+
+        // filter out duplicates
+        let start_count = remove_files.len();
+        let remove_files: Vec<&PathBuf> = remove_files
+            .into_iter()
+            .unique()
+            .collect();
+        info!("remove_files: initial={}, filtered={}", start_count, remove_files.len());
+
+        // process removed files
+        for remove_path in remove_files {
+            let file_name = remove_path.file_name()
+                .expect("unable to extract file_name")
+                .to_str()
+                .expect("unable to convert file_name to str")
+                .to_string();
+            self.items.retain(|x| {
+                match x {
+                    DirectoryListItem::ParentDir(_) => true,
+                    DirectoryListItem::Entry(e) => {
+                        if e.name == file_name {
+                            info!("removing file {}", file_name);
+                            false
+                        } else {
+                            true
                         }
                     }
-                },
-                _ => {}
+                }
+            })
+        }
+
+        // process create files
+        for create_path in create_files {
+            let data: DirEntryData = create_path.into();
+            if data.file_type.is_dir() || data.file_type.is_symlink() {
+                self.register_size_calculator(data.clone());
             }
+            let filename = data.name.clone();
+            info!("Adding file {}", filename);
+            let data_item = DirectoryListItem::Entry(data);
+            self.items.push(data_item);
         }
 
         // process modified files
-        for fs_event in modify_events {
+        let mut heavy_refresh_needed = false;
+        for fs_event in fs_events {
             match &fs_event.kind {
                 notify::EventKind::Modify(modify_kind) => {
                     match modify_kind {
@@ -488,7 +469,10 @@ impl DirectoryList {
                             }
                         },
                         notify::event::ModifyKind::Name(name_change) => {
-                            // TODO: replace old file with new file
+                            // notify breaks name changes into 2 separate events
+                            // TODO: perform a heavy refresh (for now)
+                            heavy_refresh_needed = true;
+                            break;
                         },
                         notify::event::ModifyKind::Metadata(metadata_kind) => {
                             // TODO: file permissions (etc.) may have changed
@@ -498,6 +482,15 @@ impl DirectoryList {
                 _ => {}
             }
         }
+
+        if heavy_refresh_needed {
+            info!("call standard refresh() due to events seen");
+            self.refresh();
+        } else {
+            self.items
+                .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, self.sort_by.clone()));
+        }
+
         Ok(())
     }
 

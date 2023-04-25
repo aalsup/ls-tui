@@ -20,6 +20,8 @@ use tui::{
     Terminal,
     text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
 };
+use tracing::{info, Level};
+use tracing_subscriber::FmtSubscriber;
 
 use dir_list::*;
 
@@ -247,6 +249,15 @@ enum KeyInputResult {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+
+    // setup tracing
+    let file_appender = tracing_appender::rolling::never("/tmp", "lt.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .init();
+
+    info!("application started");
 
     // setup terminal
     enable_raw_mode()?;
