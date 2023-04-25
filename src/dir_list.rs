@@ -5,13 +5,13 @@ use std::fs::{DirEntry, FileType, Permissions};
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Instant, SystemTime};
 
 use byte_unit::Byte;
 use fs_extra::dir::get_size;
-use notify::{Event, RecursiveMode, Watcher};
+use notify::{Watcher};
 use tui::style::{Modifier, Style};
 use tui::widgets::{ListState, Row, TableState};
 use unix_permissions_ext::UNIXPermissionsExt;
@@ -85,6 +85,37 @@ pub struct DirEntryData {
 pub struct SizeNotification {
     pub name: String,
     pub size: u64,
+}
+
+impl From<&PathBuf> for DirEntryData {
+    fn from(path: &PathBuf) -> Self {
+        let file_name = path.file_name()
+            .expect("unable to read file_name")
+            .to_str()
+            .expect("unable to get file_name as str")
+            .to_string();
+        let meta = path.metadata()
+            .expect(format!("unable to get metadata for {}", file_name).as_str());
+        let file_type = meta.file_type();
+        let mut file_size: Option<u64> = None;
+        if file_type.is_file() {
+            file_size = Some(meta.len());
+        }
+        let uid = meta.st_uid();
+        let gid = meta.st_gid();
+        let permissions = meta.permissions();
+        let modified = meta.modified()
+            .expect("Unable to get modified from DirEntry");
+        DirEntryData {
+            name: file_name,
+            file_type,
+            size: file_size,
+            uid,
+            gid,
+            permissions,
+            modified,
+        }
+    }
 }
 
 impl From<DirEntry> for DirEntryData {
@@ -194,8 +225,8 @@ pub struct DirectoryList {
     // changing directory
     pub dir_change_tx: Option<Sender<String>>,
     // watched directory
-    pub dir_watch_tx: Option<Sender<Event>>,
-    pub dir_watch_rx: Option<Receiver<Event>>,
+    pub dir_watch_tx: Option<Sender<notify::Event>>,
+    pub dir_watch_rx: Option<Receiver<notify::Event>>,
     // dir size computed
     pub dir_size_tx: Option<Sender<SizeNotification>>,
     pub dir_size_rx: Option<Receiver<SizeNotification>>,
@@ -238,7 +269,7 @@ impl DirectoryList {
                 let (dir_change_tx, dir_change_rx): (Sender<String>, Receiver<String>) = channel();
                 self.dir_change_tx = Some(dir_change_tx.clone());
                 // this is used to receive updates from the watcher
-                let (dir_watch_tx, dir_watch_rx): (Sender<Event>, Receiver<Event>) = channel();
+                let (dir_watch_tx, dir_watch_rx): (Sender<notify::Event>, Receiver<notify::Event>) = channel();
                 self.dir_watch_tx = Some(dir_watch_tx.clone());
                 self.dir_watch_rx = Some(dir_watch_rx);
                 thread::spawn(move || {
@@ -250,7 +281,7 @@ impl DirectoryList {
                             Err(_) => {}
                         }
                     }).expect("unable to create recommended_watcher");
-                    watcher.watch(Path::new(dir.as_str()), RecursiveMode::NonRecursive)
+                    watcher.watch(Path::new(dir.as_str()), notify::RecursiveMode::NonRecursive)
                         .expect("unable to watch dir");
                     let mut cur_dir = dir.clone();
                     loop {
@@ -261,15 +292,15 @@ impl DirectoryList {
                                 watcher.unwatch(Path::new(cur_dir.as_str()))
                                     .expect("unable to unwatch dir");
                                 cur_dir = new_dir.clone();
-                                watcher.watch(Path::new(new_dir.as_str()), RecursiveMode::NonRecursive)
+                                watcher.watch(Path::new(new_dir.as_str()), notify::RecursiveMode::NonRecursive)
                                     .expect("unable to watch new dir");
-                            },
+                            }
                             Err(TryRecvError::Empty) => {
                                 // nothing in the channel
                             }
                             Err(TryRecvError::Disconnected) => {
                                 break;
-                            },
+                            }
                         }
                         let sleep_millis = time::Duration::from_millis(250);
                         thread::sleep(sleep_millis);
@@ -280,7 +311,7 @@ impl DirectoryList {
         Ok(())
     }
 
-    fn register_size_watcher(&mut self, data: DirEntryData) {
+    fn register_size_calculator(&mut self, data: DirEntryData) {
         if self.dir_size_rx.is_none() {
             // construct a new channel
             let (tx, rx): (Sender<SizeNotification>, Receiver<SizeNotification>) = channel();
@@ -312,17 +343,163 @@ impl DirectoryList {
         }
     }
 
-    pub(crate) fn smart_refresh(&mut self) -> Result<(), io::Error> {
-        // figure out how to only touch things that have changed since the previous read
-        self.event_tx.send("smart_refresh() called".to_string())
-            .expect("unable to send smart_refresh() event");
+    pub(crate) fn smart_refresh(&mut self, fs_events: Vec<notify::Event>) -> Result<(), io::Error> {
+        // Bug: `rm file1` generates both Create(File) and Remove(File) events.
 
-        // Create(File):["/path/filename"]
-        // Remove(File):["/path/filename"]
-        // Modify(Metadata(Extended)):["path/filename"]
-        // Modify(Name(Any)):["/path/filename"]
-        // Modify(Data(Content)):["/path/filename"]
+        // collect remove events
+        let remove_events: &Vec<&notify::Event> = &fs_events
+            .iter()
+            .filter(|x| {
+                match x.kind {
+                    notify::EventKind::Remove(_) => true,
+                    _ => false
+                }
+            })
+            .collect();
 
+        // collect remove file names
+        let mut remove_files: Vec<&PathBuf> = vec![];
+        for remove_event in remove_events {
+            for path in &remove_event.paths {
+                remove_files.push(path);
+            }
+        }
+
+        // collect modify events
+        let modify_events: &Vec<&notify::Event> = &fs_events
+            .iter()
+            .filter(|x| {
+                match x.kind {
+                    notify::EventKind::Modify(_) => true,
+                    _ => false
+                }
+            })
+            .collect();
+
+        // collect create events (that do not have remove events)
+        let create_events: Vec<&notify::Event> = fs_events
+            .iter()
+            .filter(|fs_event| {
+                match fs_event.kind {
+                    notify::EventKind::Create(create_event) => {
+                        match create_event {
+                            notify::event::CreateKind::File | notify::event::CreateKind::Folder => {
+                                let mut found = false;
+                                for create_path in &fs_event.paths {
+                                    if (*remove_files).contains(&create_path) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                !found
+                            },
+                            _ => false
+                        }
+                    }
+                    _ => false
+                }
+            })
+            .collect();
+
+        // process removed files
+        for fs_event in remove_events {
+            match fs_event.kind {
+                notify::EventKind::Remove(remove_kind) => {
+                    match remove_kind {
+                        notify::event::RemoveKind::Any | notify::event::RemoveKind::Other => {
+                            // do nothing
+                        },
+                        notify::event::RemoveKind::File | notify::event::RemoveKind::Folder => {
+                            for remove_path in &fs_event.paths {
+                                let file_name = remove_path.file_name()
+                                    .expect("unable to extract file_name")
+                                    .to_str()
+                                    .expect("unable to convert file_name to str")
+                                    .to_string();
+                                self.items.retain(|x| {
+                                    match x {
+                                        DirectoryListItem::ParentDir(_) => true,
+                                        DirectoryListItem::Entry(e) => {
+                                            e.name != file_name
+                                        }
+                                    }
+                                })
+                            }
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        // process new files
+        for fs_event in create_events {
+            match &fs_event.kind {
+                notify::EventKind::Create(create_kind) => {
+                    match create_kind {
+                        notify::event::CreateKind::Any | notify::event::CreateKind::Other => {
+                        },
+                        notify::event::CreateKind::File | notify::event::CreateKind::Folder => {
+                            let mut data_items: Vec<DirectoryListItem> = fs_event.paths
+                                .iter()
+                                .map(|x| {
+                                    let data: DirEntryData = (x as &PathBuf).into();
+                                    if data.file_type.is_dir() || data.file_type.is_symlink() {
+                                        self.register_size_calculator(data.clone());
+                                    }
+                                    data
+                                })
+                                .map(|x| DirectoryListItem::Entry(x))
+                                .collect();
+                            // TODO: getting duplicates: implement self.add_item() to prevent dupes.
+                            self.items.append(&mut data_items);
+                            self.items
+                                .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, self.sort_by.clone()));
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        // process modified files
+        for fs_event in modify_events {
+            match &fs_event.kind {
+                notify::EventKind::Modify(modify_kind) => {
+                    match modify_kind {
+                        notify::event::ModifyKind::Any | notify::event::ModifyKind::Other => {
+                            // TODO: either do nothing or do everything?
+                        },
+                        notify::event::ModifyKind::Data(data_change) => {
+                            match data_change {
+                                notify::event::DataChange::Size => {
+                                    // compute size
+                                    let _ = fs_event.paths
+                                        .iter()
+                                        .map(|x| {
+                                            let data: DirEntryData = (x as &PathBuf).into();
+                                            if data.file_type.is_dir() || data.file_type.is_symlink() {
+                                                self.register_size_calculator(data.clone());
+                                            }
+                                            data
+                                        });
+                                },
+                                _ => {
+                                    // ignore other changes
+                                }
+                            }
+                        },
+                        notify::event::ModifyKind::Name(name_change) => {
+                            // TODO: replace old file with new file
+                        },
+                        notify::event::ModifyKind::Metadata(metadata_kind) => {
+                            // TODO: file permissions (etc.) may have changed
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
         Ok(())
     }
 
@@ -335,7 +512,7 @@ impl DirectoryList {
             .map(|x| {
                 let data: DirEntryData = x.into();
                 if data.file_type.is_dir() || data.file_type.is_symlink() {
-                    self.register_size_watcher(data.clone());
+                    self.register_size_calculator(data.clone());
                 }
                 data
             })

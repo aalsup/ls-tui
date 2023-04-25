@@ -90,13 +90,13 @@ impl App {
     /// Do something every so often
     fn on_tick(&mut self) {
         // check if filesystem has changed
-        let mut got_fs_event = false;
+        let mut fs_events: Vec<notify::Event> = vec![];
         // drain the dir_watch channel
         loop {
             if let Some(rx) = self.dir_list.dir_watch_rx.as_mut() {
                 match rx.try_recv() {
                     Ok(event) => {
-                        got_fs_event = true;
+                        fs_events.push(event.clone());
                         self.event_tx.send(format!("FS ev: {:?}:{:?}", event.kind, event.paths))
                             .expect("unable to send event_tx in on_tick()");
                     },
@@ -109,8 +109,8 @@ impl App {
                 }
             }
         }
-        if got_fs_event {
-            let _result = self.dir_list.smart_refresh();
+        if fs_events.len() > 0 {
+            let _result = self.dir_list.smart_refresh(fs_events);
         }
         // check for size notifications
         loop {
