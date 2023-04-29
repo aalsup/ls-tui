@@ -20,7 +20,7 @@ use tui::{
     Terminal,
     text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
 };
-use tracing::{debug, Level};
+use tracing;
 
 use dir_list::*;
 
@@ -43,6 +43,8 @@ pub enum AppError {
 struct Args {
     #[clap(index = 1)]
     dir_name: Option<String>,
+    #[arg(short, long, default_value_t = 0)]
+    trace: u8
 }
 
 struct App {
@@ -249,15 +251,28 @@ enum KeyInputResult {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
+    let tracing_level: tracing::Level = {
+        if args.trace == 0 {
+            tracing::Level::ERROR
+        } else if args.trace == 1 {
+            tracing::Level::WARN
+        } else if args.trace == 2 {
+            tracing::Level::INFO
+        } else if args.trace == 3 {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::TRACE
+        }
+    };
     // setup tracing
-    let file_appender = tracing_appender::rolling::never("/tmp", "lt.log");
+    let file_appender = tracing_appender::rolling::never("/tmp", "lsls.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::fmt()
         .with_writer(non_blocking)
-        .with_max_level(Level::DEBUG)
+        .with_max_level(tracing_level)
         .init();
 
-    debug!("application started");
+    tracing::debug!("application started");
 
     // setup terminal
     enable_raw_mode()?;

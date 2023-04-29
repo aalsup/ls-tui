@@ -17,7 +17,7 @@ use tui::style::{Modifier, Style};
 use tui::widgets::{ListState, Row, TableState};
 use unix_permissions_ext::UNIXPermissionsExt;
 use users::get_user_by_uid;
-use tracing::{info, debug};
+use tracing;
 
 use crate::AppError;
 
@@ -291,7 +291,7 @@ impl DirectoryList {
                         let dir_event = dir_change_rx.try_recv();
                         match dir_event {
                             Ok(new_dir) => {
-                                debug!("dir watcher thread received a new dir: {}", new_dir);
+                                tracing::debug!("dir watcher thread received a new dir: {}", new_dir);
                                 // changed directory to watch
                                 watcher.unwatch(Path::new(cur_dir.as_str()))
                                     .expect("unable to unwatch dir");
@@ -333,7 +333,7 @@ impl DirectoryList {
                 let cur_path = Path::new(parent_dir.as_str());
                 let file_path = cur_path.join(&data.name).canonicalize()
                     .expect("unable to canonicalize path for getting dir_size");
-                debug!("Computing dir size for {}", data.name.clone());
+                tracing::debug!("Computing dir size for {}", data.name.clone());
                 let start = Instant::now();
                 let dir_size = get_size(file_path).unwrap_or(0);
                 let duration = start.elapsed();
@@ -343,7 +343,7 @@ impl DirectoryList {
                         size: dir_size,
                     }
                 ).expect("unable to send dir_size_tx from thread");
-                debug!("Dir size for {} in {:?}", data.name.clone(), duration);
+                tracing::debug!("Dir size for {} in {:?}", data.name.clone(), duration);
                 event_tx.send(format!("Dir size for {} in {:?}", data.name.clone(), duration))
                     .expect("unable to send event_tx for directory size");
             });
@@ -353,7 +353,7 @@ impl DirectoryList {
     #[tracing::instrument]
     pub(crate) fn smart_refresh(&mut self, fs_events: Vec<notify::Event>) -> Result<(), io::Error> {
         // Bug: `rm file1` generates both Create(File) and Remove(File) events.
-        info!("smart_refresh() called with {} events", fs_events.len());
+        tracing::info!("smart_refresh() called with {} events", fs_events.len());
 
         let mut create_files: Vec<&PathBuf> = vec![];
         let mut modify_files: Vec<&PathBuf> = vec![];
@@ -390,7 +390,7 @@ impl DirectoryList {
             })
             .unique()
             .collect();
-        debug!("create_files: initial={}, filtered={}", start_count, create_files.len());
+        tracing::debug!("create_files: initial={}, filtered={}", start_count, create_files.len());
 
         // filter out modify events that also have remove events
         let start_count = modify_files.len();
@@ -401,7 +401,7 @@ impl DirectoryList {
             })
             .unique()
             .collect();
-        debug!("modify_files: initial={}, filtered={}", start_count, modify_files.len());
+        tracing::debug!("modify_files: initial={}, filtered={}", start_count, modify_files.len());
 
         // filter out duplicates
         let start_count = remove_files.len();
@@ -409,7 +409,7 @@ impl DirectoryList {
             .into_iter()
             .unique()
             .collect();
-        debug!("remove_files: initial={}, filtered={}", start_count, remove_files.len());
+        tracing::debug!("remove_files: initial={}, filtered={}", start_count, remove_files.len());
 
         // process removed files
         for remove_path in remove_files {
@@ -423,7 +423,7 @@ impl DirectoryList {
                     DirectoryListItem::ParentDir(_) => true,
                     DirectoryListItem::Entry(e) => {
                         if e.name == file_name {
-                            info!("removing file {}", file_name);
+                            tracing::info!("removing file {}", file_name);
                             false
                         } else {
                             true
@@ -440,7 +440,7 @@ impl DirectoryList {
                 self.register_size_calculator(data.clone());
             }
             let filename = data.name.clone();
-            debug!("Adding file {}", filename);
+            tracing::debug!("Adding file {}", filename);
             let data_item = DirectoryListItem::Entry(data);
             self.items.push(data_item);
         }
@@ -453,7 +453,7 @@ impl DirectoryList {
                     match modify_kind {
                         notify::event::ModifyKind::Name(_name_change) => {
                             // notify breaks name changes into 2 separate events
-                            debug!("name changed: requires heavy refresh");
+                            tracing::debug!("name changed: requires heavy refresh");
                             heavy_refresh_needed = true;
                             break;
                         },
@@ -465,7 +465,7 @@ impl DirectoryList {
                                     .to_str()
                                     .expect("unable to convert file_name to str")
                                     .to_string();
-                                debug!("changing file {}", file_name);
+                                tracing::debug!("changing file {}", file_name);
                                 // remove this item from the list
                                 self.items.retain(|item| {
                                     match item {
@@ -485,7 +485,7 @@ impl DirectoryList {
                                     self.register_size_calculator(data.clone());
                                 }
                                 let filename = data.name.clone();
-                                debug!("Refreshing file {}", filename);
+                                tracing::debug!("Refreshing file {}", filename);
                                 let data_item = DirectoryListItem::Entry(data);
                                 self.items.push(data_item);
                             }
@@ -497,7 +497,7 @@ impl DirectoryList {
         }
 
         if heavy_refresh_needed {
-            debug!("call standard refresh() due to events seen");
+            tracing::debug!("call standard refresh() due to events seen");
             self.refresh().expect("refresh() errored");
         } else {
             self.items

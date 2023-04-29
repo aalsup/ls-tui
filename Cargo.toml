@@ -6,7 +6,7 @@ edition = "2021"
 repository = "https://github.com/aalsup/ls-tui"
 
 [[bin]]
-name = "lt"
+name = "lsls"
 path = "src/main.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
