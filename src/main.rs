@@ -349,7 +349,7 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
         KeyCode::Char('q') => {
             return KeyInputResult::Stop;
         }
-        KeyCode::Enter | KeyCode::Char(' ') => {
+        KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') => {
             // get the selected item
             if let Some(sel_idx) = app.dir_list.state.selected() {
                 match &app.dir_list.items[sel_idx] {
@@ -360,28 +360,39 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
                         if entry.file_type.is_dir() {
                             app.navigate_to_relative_directory(entry.name.clone()).ok();
                         } else {
-                            let cur_path = Path::new(&app.dir);
-                            let entry_path = cur_path.join(&entry.name);
-                            let _result = opener::open(entry_path.as_path());
+                            // open the file (unless `l` key was pressed -- that would just be weird)
+                            if key.code != KeyCode::Char('l') {
+                                let cur_path = Path::new(&app.dir);
+                                let entry_path = cur_path.join(&entry.name);
+                                let _result = opener::open(entry_path.as_path());
+                            }
                         }
                     }
                 }
             }
-        }
+        },
         KeyCode::Down | KeyCode::Char('j') => {
             app.dir_list.select_next();
             app.load_file_snippet().ok();
-        }
+        },
         KeyCode::Up | KeyCode::Char('k') => {
             app.dir_list.select_previous();
             app.load_file_snippet().ok();
-        }
+        },
         KeyCode::Left | KeyCode::Char('h') => {
             app.navigate_to_parent_directory().ok();
-        }
+        },
         KeyCode::Char('s') => {
             app.show_popup_sort = !app.show_popup_sort;
-        }
+        },
+        KeyCode::Char('g') => {
+            app.dir_list.select_first();
+            app.load_file_snippet().ok();
+        },
+        KeyCode::Char('G') => {
+            app.dir_list.select_last();
+            app.load_file_snippet().ok();
+        },
         _ => {}
     }
 

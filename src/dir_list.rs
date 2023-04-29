@@ -536,7 +536,6 @@ impl DirectoryList {
     }
 
     /// Sort the DirectoryListItems based on the `sort_by` parameter.
-    #[tracing::instrument]
     fn compare_dir_items(a: &DirectoryListItem, b: &DirectoryListItem, sort_by: &SortBy) -> Ordering {
         match (a, b) {
             (DirectoryListItem::ParentDir(a_str), DirectoryListItem::ParentDir(b_str)) => {
@@ -633,6 +632,18 @@ impl DirectoryList {
             None => 0,
         };
         self.state.select(Some(i));
+    }
+
+    pub(crate) fn select_last(&mut self) {
+        if self.items.len() > 0 {
+            self.state.select(Some(self.items.len() - 1));
+        }
+    }
+
+    pub(crate) fn select_first(&mut self) {
+        if self.items.len() > 0 {
+            self.state.select(Some(0));
+        }
     }
 
     /// Unselect any previously selected item in the list.
