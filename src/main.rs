@@ -347,8 +347,20 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
 
     match key.code {
         KeyCode::Char('q') => {
+            // bail
             return KeyInputResult::Stop;
-        }
+        },
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.dir_list.select_next();
+            app.load_file_snippet().ok();
+        },
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.dir_list.select_previous();
+            app.load_file_snippet().ok();
+        },
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.navigate_to_parent_directory().ok();
+        },
         KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') => {
             // get the selected item
             if let Some(sel_idx) = app.dir_list.state.selected() {
@@ -371,17 +383,11 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
                 }
             }
         },
-        KeyCode::Down | KeyCode::Char('j') => {
-            app.dir_list.select_next();
-            app.load_file_snippet().ok();
-        },
-        KeyCode::Up | KeyCode::Char('k') => {
-            app.dir_list.select_previous();
-            app.load_file_snippet().ok();
-        },
-        KeyCode::Left | KeyCode::Char('h') => {
-            app.navigate_to_parent_directory().ok();
-        },
+        KeyCode::Char('i') => {
+            let event_tx= app.event_tx.clone();
+            event_tx.send("Show info dialog".to_string())
+                .expect("unable to send show info event");
+        }
         KeyCode::Char('s') => {
             app.show_popup_sort = !app.show_popup_sort;
         },
