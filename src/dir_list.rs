@@ -1,7 +1,6 @@
 use std::{fmt, fs, io, thread, time};
 use std::cmp::Ordering;
 use std::fs::{DirEntry, FileType, Permissions};
-use std::ops::{Deref, DerefMut};
 #[cfg(target_os = "linux")]
 use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
@@ -13,12 +12,12 @@ use std::time::{Instant, SystemTime};
 use byte_unit::Byte;
 use fs_extra::dir::get_size;
 use itertools::Itertools;
-use notify::{event, Watcher};
+use notify::{Watcher};
 use tui::style::{Modifier, Style};
 use tui::widgets::{ListState, Row, TableState};
 use unix_permissions_ext::UNIXPermissionsExt;
 use users::get_user_by_uid;
-use tracing::{info, Level};
+use tracing::{info, debug};
 
 use crate::AppError;
 
@@ -179,7 +178,7 @@ impl From<DirectoryListItem> for Row<'_> {
                         let adjusted_byte = byte.get_appropriate_unit(false);
                         adjusted_byte.to_string()
                     } else {
-                        "?".to_string()
+                        "...".to_string()
                     }
                 };
                 let mut user = item.uid.to_string();
@@ -258,6 +257,7 @@ impl DirectoryList {
         }
     }
 
+    #[tracing::instrument]
     pub(crate) fn watch(&mut self) -> Result<(), AppError> {
         match &self.dir_change_tx {
             Some(dir_change_tx) => {
@@ -291,6 +291,7 @@ impl DirectoryList {
                         let dir_event = dir_change_rx.try_recv();
                         match dir_event {
                             Ok(new_dir) => {
+                                debug!("dir watcher thread received a new dir: {}", new_dir);
                                 // changed directory to watch
                                 watcher.unwatch(Path::new(cur_dir.as_str()))
                                     .expect("unable to unwatch dir");
@@ -314,6 +315,7 @@ impl DirectoryList {
         Ok(())
     }
 
+    #[tracing::instrument]
     fn register_size_calculator(&mut self, data: DirEntryData) {
         if self.dir_size_rx.is_none() {
             // construct a new channel
@@ -331,6 +333,7 @@ impl DirectoryList {
                 let cur_path = Path::new(parent_dir.as_str());
                 let file_path = cur_path.join(&data.name).canonicalize()
                     .expect("unable to canonicalize path for getting dir_size");
+                debug!("Computing dir size for {}", data.name.clone());
                 let start = Instant::now();
                 let dir_size = get_size(file_path).unwrap_or(0);
                 let duration = start.elapsed();
@@ -340,12 +343,14 @@ impl DirectoryList {
                         size: dir_size,
                     }
                 ).expect("unable to send dir_size_tx from thread");
+                debug!("Dir size for {} in {:?}", data.name.clone(), duration);
                 event_tx.send(format!("Dir size for {} in {:?}", data.name.clone(), duration))
                     .expect("unable to send event_tx for directory size");
             });
         }
     }
 
+    #[tracing::instrument]
     pub(crate) fn smart_refresh(&mut self, fs_events: Vec<notify::Event>) -> Result<(), io::Error> {
         // Bug: `rm file1` generates both Create(File) and Remove(File) events.
         info!("smart_refresh() called with {} events", fs_events.len());
@@ -385,7 +390,7 @@ impl DirectoryList {
             })
             .unique()
             .collect();
-        info!("create_files: initial={}, filtered={}", start_count, create_files.len());
+        debug!("create_files: initial={}, filtered={}", start_count, create_files.len());
 
         // filter out modify events that also have remove events
         let start_count = modify_files.len();
@@ -396,7 +401,7 @@ impl DirectoryList {
             })
             .unique()
             .collect();
-        info!("modify_files: initial={}, filtered={}", start_count, modify_files.len());
+        debug!("modify_files: initial={}, filtered={}", start_count, modify_files.len());
 
         // filter out duplicates
         let start_count = remove_files.len();
@@ -404,7 +409,7 @@ impl DirectoryList {
             .into_iter()
             .unique()
             .collect();
-        info!("remove_files: initial={}, filtered={}", start_count, remove_files.len());
+        debug!("remove_files: initial={}, filtered={}", start_count, remove_files.len());
 
         // process removed files
         for remove_path in remove_files {
@@ -425,7 +430,7 @@ impl DirectoryList {
                         }
                     }
                 }
-            })
+            });
         }
 
         // process create files
@@ -435,7 +440,7 @@ impl DirectoryList {
                 self.register_size_calculator(data.clone());
             }
             let filename = data.name.clone();
-            info!("Adding file {}", filename);
+            debug!("Adding file {}", filename);
             let data_item = DirectoryListItem::Entry(data);
             self.items.push(data_item);
         }
@@ -446,36 +451,44 @@ impl DirectoryList {
             match &fs_event.kind {
                 notify::EventKind::Modify(modify_kind) => {
                     match modify_kind {
-                        notify::event::ModifyKind::Any | notify::event::ModifyKind::Other => {
-                            // TODO: either do nothing or do everything?
-                        },
-                        notify::event::ModifyKind::Data(data_change) => {
-                            match data_change {
-                                notify::event::DataChange::Size => {
-                                    // compute size
-                                    let _ = fs_event.paths
-                                        .iter()
-                                        .map(|x| {
-                                            let data: DirEntryData = (x as &PathBuf).into();
-                                            if data.file_type.is_dir() || data.file_type.is_symlink() {
-                                                self.register_size_calculator(data.clone());
-                                            }
-                                            data
-                                        });
-                                },
-                                _ => {
-                                    // ignore other changes
-                                }
-                            }
-                        },
-                        notify::event::ModifyKind::Name(name_change) => {
+                        notify::event::ModifyKind::Name(_name_change) => {
                             // notify breaks name changes into 2 separate events
-                            // TODO: perform a heavy refresh (for now)
+                            debug!("name changed: requires heavy refresh");
                             heavy_refresh_needed = true;
                             break;
                         },
-                        notify::event::ModifyKind::Metadata(metadata_kind) => {
-                            // TODO: file permissions (etc.) may have changed
+                        _ => {
+                            // file permissions (etc.) may have changed
+                            for path in &fs_event.paths {
+                                let file_name = path.file_name()
+                                    .expect("unable to extract file_name")
+                                    .to_str()
+                                    .expect("unable to convert file_name to str")
+                                    .to_string();
+                                debug!("changing file {}", file_name);
+                                // remove this item from the list
+                                self.items.retain(|item| {
+                                    match item {
+                                        DirectoryListItem::ParentDir(_) => true,
+                                        DirectoryListItem::Entry(item) => {
+                                            if item.name == file_name {
+                                                false
+                                            } else {
+                                                true
+                                            }
+                                        }
+                                    }
+                                });
+                                // refresh the modified file
+                                let data: DirEntryData = path.into();
+                                if data.file_type.is_dir() || data.file_type.is_symlink() {
+                                    self.register_size_calculator(data.clone());
+                                }
+                                let filename = data.name.clone();
+                                debug!("Refreshing file {}", filename);
+                                let data_item = DirectoryListItem::Entry(data);
+                                self.items.push(data_item);
+                            }
                         }
                     }
                 },
@@ -484,16 +497,17 @@ impl DirectoryList {
         }
 
         if heavy_refresh_needed {
-            info!("call standard refresh() due to events seen");
-            self.refresh();
+            debug!("call standard refresh() due to events seen");
+            self.refresh().expect("refresh() errored");
         } else {
             self.items
-                .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, self.sort_by.clone()));
+                .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, &self.sort_by));
         }
 
         Ok(())
     }
 
+    #[tracing::instrument]
     pub(crate) fn refresh(&mut self) -> Result<(), io::Error> {
         self.items.clear();
         // read all the items in the directory
@@ -512,7 +526,7 @@ impl DirectoryList {
         self.items
             .insert(0, DirectoryListItem::ParentDir("..".to_string()));
         self.items
-            .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, self.sort_by.clone()));
+            .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, &self.sort_by));
 
         if self.state.selected() == None {
             self.state.select(Some(0));
@@ -522,7 +536,8 @@ impl DirectoryList {
     }
 
     /// Sort the DirectoryListItems based on the `sort_by` parameter.
-    fn compare_dir_items(a: &DirectoryListItem, b: &DirectoryListItem, sort_by: SortBy) -> Ordering {
+    #[tracing::instrument]
+    fn compare_dir_items(a: &DirectoryListItem, b: &DirectoryListItem, sort_by: &SortBy) -> Ordering {
         match (a, b) {
             (DirectoryListItem::ParentDir(a_str), DirectoryListItem::ParentDir(b_str)) => {
                 a_str.cmp(b_str)
@@ -531,7 +546,7 @@ impl DirectoryList {
             (DirectoryListItem::Entry(_), DirectoryListItem::ParentDir(_)) => Ordering::Greater,
             (DirectoryListItem::Entry(a), DirectoryListItem::Entry(b)) => {
                 #[allow(unused_assignments)]
-                    let mut sort_by_direction = SortByDirection::default();
+                let mut sort_by_direction = &SortByDirection::default();
                 let mut retval = match sort_by {
                     SortBy::TypeName(direction) => {
                         sort_by_direction = direction;

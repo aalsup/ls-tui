@@ -20,8 +20,7 @@ use tui::{
     Terminal,
     text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
 };
-use tracing::{info, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::{debug, Level};
 
 use dir_list::*;
 
@@ -54,7 +53,7 @@ struct App {
     event_rx: Receiver<String>,
     event_tx: Sender<String>,
     file_snippet: Vec<String>,
-    sort_popup: bool,
+    show_popup_sort: bool,
 }
 
 impl App {
@@ -71,7 +70,7 @@ impl App {
             event_tx,
             event_rx,
             file_snippet: vec![],
-            sort_popup: false,
+            show_popup_sort: false,
         };
         app.set_dir(dir_name);
         app
@@ -255,9 +254,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::fmt()
         .with_writer(non_blocking)
+        .with_max_level(Level::DEBUG)
         .init();
 
-    info!("application started");
+    debug!("application started");
 
     // setup terminal
     enable_raw_mode()?;
@@ -290,7 +290,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
     match key.code {
         KeyCode::Char('q') => {
-            app.sort_popup = false;
+            app.show_popup_sort = false;
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
             app.dir_list.sort_by = SortBy::all()[
@@ -298,7 +298,7 @@ fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
                     .selected()
                     .expect("unable to identify selected sort_by item")
                 ].clone();
-            app.sort_popup = false;
+            app.show_popup_sort = false;
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(mut selected_idx) = app.dir_list.sort_by_list_state.selected() {
@@ -326,7 +326,7 @@ fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
 }
 
 fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
-    if app.sort_popup {
+    if app.show_popup_sort {
         return handle_input_popup(app, key);
     }
 
@@ -365,7 +365,7 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
             app.navigate_to_parent_directory().ok();
         }
         KeyCode::Char('s') => {
-            app.sort_popup = !app.sort_popup;
+            app.show_popup_sort = !app.show_popup_sort;
         }
         _ => {}
     }
@@ -490,7 +490,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
 
     f.render_stateful_widget(events_list, v_panes[1], &mut app.event_list_state);
 
-    if app.sort_popup {
+    if app.show_popup_sort {
         let sort_by_items: Vec<ListItem> = SortBy::all()
             .iter()
             .map(|sort_by| {
