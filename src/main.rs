@@ -11,6 +11,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use crossterm::event::KeyModifiers;
 use thiserror::Error;
 use tui::{
     backend::{Backend, CrosstermBackend},
@@ -340,12 +341,12 @@ fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
     return KeyInputResult::Continue;
 }
 
-fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
+fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
     if app.show_popup_sort {
-        return handle_input_popup(app, key);
+        return handle_input_popup(app, key_event);
     }
 
-    match key.code {
+    match key_event.code {
         KeyCode::Char('q') => {
             // QUIT -> bail
             return KeyInputResult::Stop;
@@ -372,7 +373,7 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
                             app.navigate_to_relative_directory(entry.name.clone()).ok();
                         } else {
                             // open the file (unless `l` key was pressed -- that would just be weird)
-                            if key.code != KeyCode::Char('l') {
+                            if key_event.code != KeyCode::Char('l') {
                                 let cur_path = Path::new(&app.dir);
                                 let entry_path = cur_path.join(&entry.name);
                                 let _result = opener::open(entry_path.as_path());
@@ -383,7 +384,7 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
             }
             return KeyInputResult::Continue;
         },
-        
+
         // the remaining keys should refresh the snippet pane
         KeyCode::Down | KeyCode::Char('j') => {
             app.dir_list.select_next();
@@ -400,6 +401,23 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
         KeyCode::Char('G') => {
             app.dir_list.select_last();
         },
+        // TODO: next-page (CTRL+f), prev-page (CTRL+b)
+        KeyCode::Char('f') => {
+            match key_event.modifiers {
+                KeyModifiers::CONTROL => {
+                    // TODO: next page
+                },
+                _ => {}
+            }
+        },
+        KeyCode::Char('b') => {
+            match key_event.modifiers {
+                KeyModifiers::CONTROL => {
+                    // TODO: previous page
+                },
+                _ => {}
+            }
+        }
         _ => {}
     }
 
