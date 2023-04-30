@@ -347,7 +347,7 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
 
     match key.code {
         KeyCode::Char('q') => {
-            // bail
+            // QUIT -> bail
             return KeyInputResult::Stop;
         },
         KeyCode::Char('s') => {
@@ -359,15 +359,6 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
             event_tx.send("Show info dialog".to_string())
                 .expect("unable to send show info event");
             return KeyInputResult::Continue;
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            app.dir_list.select_next();
-        },
-        KeyCode::Up | KeyCode::Char('k') => {
-            app.dir_list.select_previous();
-        },
-        KeyCode::Left | KeyCode::Char('h') => {
-            app.navigate_to_parent_directory().ok();
         },
         KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') => {
             // get the selected item
@@ -390,6 +381,18 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
                     }
                 }
             }
+            return KeyInputResult::Continue;
+        },
+        
+        // the remaining keys should refresh the snippet pane
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.dir_list.select_next();
+        },
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.dir_list.select_previous();
+        },
+        KeyCode::Left | KeyCode::Char('h') => {
+            app.navigate_to_parent_directory().ok();
         },
         KeyCode::Char('g') => {
             app.dir_list.select_first();
@@ -401,6 +404,7 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
     }
 
     app.load_file_snippet().ok();
+
     return KeyInputResult::Continue;
 }
 
