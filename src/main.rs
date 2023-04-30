@@ -350,13 +350,21 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
             // bail
             return KeyInputResult::Stop;
         },
+        KeyCode::Char('s') => {
+            app.show_popup_sort = !app.show_popup_sort;
+            return KeyInputResult::Continue;
+        },
+        KeyCode::Char('i') => {
+            let event_tx= app.event_tx.clone();
+            event_tx.send("Show info dialog".to_string())
+                .expect("unable to send show info event");
+            return KeyInputResult::Continue;
+        }
         KeyCode::Down | KeyCode::Char('j') => {
             app.dir_list.select_next();
-            app.load_file_snippet().ok();
         },
         KeyCode::Up | KeyCode::Char('k') => {
             app.dir_list.select_previous();
-            app.load_file_snippet().ok();
         },
         KeyCode::Left | KeyCode::Char('h') => {
             app.navigate_to_parent_directory().ok();
@@ -383,25 +391,16 @@ fn handle_input(app: &mut App, key: KeyEvent) -> KeyInputResult {
                 }
             }
         },
-        KeyCode::Char('i') => {
-            let event_tx= app.event_tx.clone();
-            event_tx.send("Show info dialog".to_string())
-                .expect("unable to send show info event");
-        }
-        KeyCode::Char('s') => {
-            app.show_popup_sort = !app.show_popup_sort;
-        },
         KeyCode::Char('g') => {
             app.dir_list.select_first();
-            app.load_file_snippet().ok();
         },
         KeyCode::Char('G') => {
             app.dir_list.select_last();
-            app.load_file_snippet().ok();
         },
         _ => {}
     }
 
+    app.load_file_snippet().ok();
     return KeyInputResult::Continue;
 }
 
