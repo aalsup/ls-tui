@@ -674,6 +674,7 @@ name = "ls-tui"
 version = "0.1.0"
 dependencies = [
  "byte-unit",
+ "chrono",
  "clap",
  "crossterm 0.26.1",
  "env_logger",

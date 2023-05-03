@@ -442,7 +442,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     // Create two chunks with equal horizontal screen space
     let h_panes = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
         .split(f.size());
 
     let v_panes = Layout::default()
@@ -462,7 +462,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
 
     let table = Table::new(rows)
         .header(
-            Row::new(vec!["Name", "Size", "User", "Group", "Usr", "Grp", "Oth"])
+            Row::new(vec!["Name", "Size", "Modified", "User", "Group", "Usr", "Grp", "Oth"])
                 .style(Style::default().fg(Color::Yellow))
                 .bottom_margin(1),
         )
@@ -475,6 +475,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .widths(&[
             Constraint::Length(20),     // name
             Constraint::Length(10),     // size
+            Constraint::Length(19),     // date
             Constraint::Length(12),     // user
             Constraint::Length(5),      // group
             Constraint::Length(3),      // usr (mask)

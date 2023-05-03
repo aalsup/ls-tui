@@ -19,6 +19,8 @@ use unix_permissions_ext::UNIXPermissionsExt;
 use users::get_user_by_uid;
 
 use log::{debug, info, warn};
+use chrono::offset::Local;
+use chrono::DateTime;
 
 use crate::AppError;
 
@@ -172,7 +174,11 @@ impl From<DirectoryListItem> for Row<'_> {
                 }
                 if item.file_type.is_symlink() {
                     style = link_style;
-                }
+                };
+                let datetime_str: String = {
+                    let datetime: DateTime<Local> = item.modified.into();
+                    datetime.format("%Y-%m-%d %T").to_string()
+                };
                 let filesize_str = {
                     if let Some(size) = item.size {
                         let byte = Byte::from_bytes(size.into());
@@ -197,6 +203,7 @@ impl From<DirectoryListItem> for Row<'_> {
                 Row::new(vec![
                     file_name,
                     filesize_str,
+                    datetime_str,
                     user,
                     gid,
                     user_perms,
