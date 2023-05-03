@@ -38,7 +38,7 @@ impl Default for SortByDirection {
 
 #[derive(Debug, Clone)]
 pub enum SortBy {
-    TypeName(SortByDirection),
+    TypeAndName(SortByDirection),
     Name(SortByDirection),
     DateTime(SortByDirection),
     Size(SortByDirection),
@@ -47,8 +47,8 @@ pub enum SortBy {
 impl SortBy {
     pub(crate) fn all() -> Vec<SortBy> {
         vec![
-            SortBy::TypeName(SortByDirection::Asc),
-            SortBy::TypeName(SortByDirection::Dec),
+            SortBy::TypeAndName(SortByDirection::Asc),
+            SortBy::TypeAndName(SortByDirection::Dec),
             SortBy::DateTime(SortByDirection::Asc),
             SortBy::DateTime(SortByDirection::Dec),
             SortBy::Name(SortByDirection::Asc),
@@ -62,8 +62,8 @@ impl SortBy {
 impl fmt::Display for SortBy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let output: String = match self {
-            SortBy::TypeName(SortByDirection::Asc) => "TypeName (ASC)".to_string(),
-            SortBy::TypeName(SortByDirection::Dec) => "TypeName (DEC)".to_string(),
+            SortBy::TypeAndName(SortByDirection::Asc) => "Type and Name (ASC)".to_string(),
+            SortBy::TypeAndName(SortByDirection::Dec) => "Type and Name (DEC)".to_string(),
             SortBy::DateTime(SortByDirection::Asc) => "DateTime (ASC)".to_string(),
             SortBy::DateTime(SortByDirection::Dec) => "DateTime (DEC)".to_string(),
             SortBy::Name(SortByDirection::Asc) => "Name (ASC)".to_string(),
@@ -244,14 +244,14 @@ pub struct DirectoryList {
 }
 
 impl DirectoryList {
-    pub(crate) fn new(dir_name: String, event_tx: Sender<String>) -> Self {
+    pub(crate) fn new(dir_name: String) -> Self {
         Self {
             dir: dir_name,
             state: TableState::default(),
             items: vec![],
             dir_change_tx: None,
             dir_watch_tx: None,
-            sort_by: SortBy::TypeName(SortByDirection::Asc),
+            sort_by: SortBy::TypeAndName(SortByDirection::Asc),
             sort_by_list_state: {
                 let mut state = ListState::default();
                 state.select(Some(0));
@@ -551,7 +551,7 @@ impl DirectoryList {
                 #[allow(unused_assignments)]
                 let mut sort_by_direction = &SortByDirection::default();
                 let mut retval = match sort_by {
-                    SortBy::TypeName(direction) => {
+                    SortBy::TypeAndName(direction) => {
                         sort_by_direction = direction;
                         if a.file_type.is_dir() && !b.file_type.is_dir() {
                             Ordering::Less

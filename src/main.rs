@@ -2,7 +2,7 @@ use std::{io, io::{BufRead, BufReader}};
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -60,13 +60,10 @@ struct App {
 
 impl App {
     fn new(dir_name: String) -> App {
-        // create the event channel
-        let (event_tx, event_rx): (Sender<String>, Receiver<String>) = channel();
-
         // create the app
         let mut app = Self {
             dir: dir_name.clone(),
-            dir_list: DirectoryList::new(dir_name.clone(), event_tx.clone()),
+            dir_list: DirectoryList::new(dir_name.clone()),
             file_snippet: vec![],
             show_popup_sort: false,
         };
