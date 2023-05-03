@@ -55,10 +55,6 @@ struct Args {
 struct App {
     dir: String,
     dir_list: DirectoryList,
-    events: Vec<String>,
-    event_list_state: ListState,
-    event_rx: Receiver<String>,
-    event_tx: Sender<String>,
     file_snippet: Vec<String>,
     show_popup_sort: bool,
 }
@@ -72,10 +68,6 @@ impl App {
         let mut app = Self {
             dir: dir_name.clone(),
             dir_list: DirectoryList::new(dir_name.clone(), event_tx.clone()),
-            events: vec![],
-            event_list_state: ListState::default(),
-            event_tx,
-            event_rx,
             file_snippet: vec![],
             show_popup_sort: false,
         };
@@ -105,8 +97,7 @@ impl App {
                 match rx.try_recv() {
                     Ok(event) => {
                         fs_events.push(event.clone());
-                        self.event_tx.send(format!("FS ev: {:?}:{:?}", event.kind, event.paths))
-                            .expect("unable to send event_tx in on_tick()");
+                        debug!("FS ev: {:?}:{:?}", event.kind, event.paths);
                     },
                     Err(TryRecvError::Empty) => {
                         break;
@@ -143,20 +134,6 @@ impl App {
                     Err(TryRecvError::Disconnected) => {
                         break;
                     }
-                }
-            }
-        }
-        // check for events
-        loop {
-            match self.event_rx.try_recv() {
-                Ok(event_msg) => {
-                    self.add_event(event_msg);
-                },
-                Err(TryRecvError::Empty) => {
-                    break;
-                },
-                Err(TryRecvError::Disconnected) => {
-                    break;
                 }
             }
         }
@@ -205,16 +182,12 @@ impl App {
         Ok(())
     }
 
-    /// Add an event to the event list. Only MAX_EVENTS are stored/displayed.
-    fn add_event(&mut self, event: String) {
-        while self.events.len() >= MAX_EVENTS {
-            self.events.remove(0);
-        }
-        self.events.push(event);
-    }
-
     /// Load a snippet of the selected file into the snippet view.
     fn load_file_snippet(&mut self) -> Result<(), io::Error> {
+        if !self.dir_list.selection_changed {
+            // the existing snippet is still valid
+            return Ok(());
+        }
         self.file_snippet.clear();
         if let Some(sel_idx) = self.dir_list.state.selected() {
             match &self.dir_list.items[sel_idx] {
@@ -233,10 +206,6 @@ impl App {
                                         .expect("unable to add line to snippet"));
                                 }
                             }
-                            self.event_tx.send(format!("File: {}, Type: {}",
-                                                       entry.name,
-                                                       mime_type.to_string()))
-                                .expect("unable to send event_tx for load_file_snippet()");
                         }
                     }
                 }
@@ -244,6 +213,7 @@ impl App {
             }
         }
 
+        self.dir_list.selection_changed = false;
         Ok(())
     }
 }
@@ -283,8 +253,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .build(log_level))?;
 
     log4rs::init_config(config)?;
-
-    debug!("application started");
 
     // setup terminal
     enable_raw_mode()?;
@@ -369,9 +337,7 @@ fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
             return KeyInputResult::Continue;
         },
         KeyCode::Char('i') => {
-            let event_tx= app.event_tx.clone();
-            event_tx.send("Show info dialog".to_string())
-                .expect("unable to send show info event");
+            // TODO: show info dialog
             return KeyInputResult::Continue;
         },
         KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') => {
@@ -414,7 +380,7 @@ fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
         KeyCode::Char('G') => {
             app.dir_list.select_last();
         },
-        // TODO: next-page (CTRL+f), prev-page (CTRL+b)
+        // TODO: next-page (CTRL+f)
         KeyCode::Char('f') => {
             match key_event.modifiers {
                 KeyModifiers::CONTROL => {
@@ -423,6 +389,7 @@ fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
                 _ => {}
             }
         },
+        // TODO: prev-page (CTRL+b)
         KeyCode::Char('b') => {
             match key_event.modifiers {
                 KeyModifiers::CONTROL => {
@@ -539,22 +506,6 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .alignment(Alignment::Left);
 
     f.render_widget(snippet_paragraph, v_panes[0]);
-
-    let events: Vec<ListItem> = app
-        .events
-        .iter()
-        .map(|event| {
-            let log = Spans::from(vec![Span::raw(event)]);
-
-            ListItem::new(vec![log])
-        })
-        .collect();
-
-    let events_list = List::new(events)
-        .block(Block::default().borders(Borders::ALL).title("Events"))
-        .start_corner(Corner::TopLeft);
-
-    f.render_stateful_widget(events_list, v_panes[1], &mut app.event_list_state);
 
     if app.show_popup_sort {
         let sort_by_items: Vec<ListItem> = SortBy::all()

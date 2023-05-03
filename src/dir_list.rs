@@ -225,6 +225,7 @@ pub struct DirectoryList {
     pub sort_by_list_state: ListState,
     pub state: TableState,
     pub items: Vec<DirectoryListItem>,
+    pub selection_changed: bool,
     // changing directory
     pub dir_change_tx: Option<Sender<String>>,
     // watched directory
@@ -233,8 +234,6 @@ pub struct DirectoryList {
     // dir size computed
     pub dir_size_tx: Option<Sender<SizeNotification>>,
     pub dir_size_rx: Option<Receiver<SizeNotification>>,
-    // event tx
-    pub event_tx: Sender<String>,
 }
 
 impl DirectoryList {
@@ -251,9 +250,9 @@ impl DirectoryList {
                 state.select(Some(0));
                 state
             },
+            selection_changed: false,
             dir_size_rx: None,
             dir_size_tx: None,
-            event_tx,
             dir_watch_rx: None,
         }
     }
@@ -324,7 +323,6 @@ impl DirectoryList {
         }
 
         let parent_dir = self.dir.clone();
-        let event_tx = self.event_tx.clone();
         if let Some(dir_size_tx) = &self.dir_size_tx {
             let dir_size_tx = dir_size_tx.clone();
             // execute the expensive `get_size()` in a separate thread (not within the tokio executor)
@@ -343,8 +341,6 @@ impl DirectoryList {
                     }
                 ).expect("unable to send dir_size_tx from thread");
                 debug!("Dir size for {} in {:?}", data.name.clone(), duration);
-                event_tx.send(format!("Dir size for {} in {:?}", data.name.clone(), duration))
-                    .expect("unable to send event_tx for directory size");
             });
         }
     }
@@ -530,6 +526,7 @@ impl DirectoryList {
 
         if self.state.selected() == None {
             self.state.select(Some(0));
+            self.selection_changed = true;
         }
 
         Ok(())
@@ -596,6 +593,7 @@ impl DirectoryList {
                     let fname = entry.name.to_string();
                     if name.eq(fname.as_str()) {
                         self.state.select(Some(i));
+                        self.selection_changed = true;
                         break;
                     }
                 }
@@ -617,6 +615,7 @@ impl DirectoryList {
             None => 0,
         };
         self.state.select(Some(i));
+        self.selection_changed = true;
     }
 
     /// Select the previous item in the list, without wrapping.
@@ -632,23 +631,27 @@ impl DirectoryList {
             None => 0,
         };
         self.state.select(Some(i));
+        self.selection_changed = true;
     }
 
     pub(crate) fn select_last(&mut self) {
         if self.items.len() > 0 {
             self.state.select(Some(self.items.len() - 1));
+            self.selection_changed = true;
         }
     }
 
     pub(crate) fn select_first(&mut self) {
         if self.items.len() > 0 {
             self.state.select(Some(0));
+            self.selection_changed = true;
         }
     }
 
     /// Unselect any previously selected item in the list.
     fn unselect(&mut self) {
         self.state.select(None);
+        self.selection_changed = true;
     }
 }
 
