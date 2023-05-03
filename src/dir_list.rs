@@ -17,7 +17,8 @@ use tui::style::{Modifier, Style};
 use tui::widgets::{ListState, Row, TableState};
 use unix_permissions_ext::UNIXPermissionsExt;
 use users::get_user_by_uid;
-use tracing;
+
+use log::{debug, info, warn};
 
 use crate::AppError;
 
@@ -257,7 +258,6 @@ impl DirectoryList {
         }
     }
 
-    #[tracing::instrument]
     pub(crate) fn watch(&mut self) -> Result<(), AppError> {
         match &self.dir_change_tx {
             Some(dir_change_tx) => {
@@ -291,7 +291,7 @@ impl DirectoryList {
                         let dir_event = dir_change_rx.try_recv();
                         match dir_event {
                             Ok(new_dir) => {
-                                tracing::debug!("dir watcher thread received a new dir: {}", new_dir);
+                                debug!("dir watcher thread received a new dir: {}", new_dir);
                                 // changed directory to watch
                                 watcher.unwatch(Path::new(cur_dir.as_str()))
                                     .expect("unable to unwatch dir");
@@ -315,7 +315,6 @@ impl DirectoryList {
         Ok(())
     }
 
-    #[tracing::instrument]
     fn register_size_calculator(&mut self, data: DirEntryData) {
         if self.dir_size_rx.is_none() {
             // construct a new channel
@@ -333,7 +332,7 @@ impl DirectoryList {
                 let cur_path = Path::new(parent_dir.as_str());
                 let file_path = cur_path.join(&data.name).canonicalize()
                     .expect("unable to canonicalize path for getting dir_size");
-                tracing::debug!("Computing dir size for {}", data.name.clone());
+                debug!("Computing dir size for {}", data.name.clone());
                 let start = Instant::now();
                 let dir_size = get_size(file_path).unwrap_or(0);
                 let duration = start.elapsed();
@@ -343,17 +342,16 @@ impl DirectoryList {
                         size: dir_size,
                     }
                 ).expect("unable to send dir_size_tx from thread");
-                tracing::debug!("Dir size for {} in {:?}", data.name.clone(), duration);
+                debug!("Dir size for {} in {:?}", data.name.clone(), duration);
                 event_tx.send(format!("Dir size for {} in {:?}", data.name.clone(), duration))
                     .expect("unable to send event_tx for directory size");
             });
         }
     }
 
-    #[tracing::instrument]
     pub(crate) fn smart_refresh(&mut self, fs_events: Vec<notify::Event>) -> Result<(), io::Error> {
         // Bug: `rm file1` generates both Create(File) and Remove(File) events.
-        tracing::info!("smart_refresh() called with {} events", fs_events.len());
+        info!("smart_refresh() called with {} events", fs_events.len());
 
         let mut create_files: Vec<&PathBuf> = vec![];
         let mut modify_files: Vec<&PathBuf> = vec![];
@@ -390,7 +388,7 @@ impl DirectoryList {
             })
             .unique()
             .collect();
-        tracing::debug!("create_files: initial={}, filtered={}", start_count, create_files.len());
+        debug!("create_files: initial={}, filtered={}", start_count, create_files.len());
 
         // filter out modify events that also have remove events
         let start_count = modify_files.len();
@@ -401,7 +399,7 @@ impl DirectoryList {
             })
             .unique()
             .collect();
-        tracing::debug!("modify_files: initial={}, filtered={}", start_count, modify_files.len());
+        debug!("modify_files: initial={}, filtered={}", start_count, modify_files.len());
 
         // filter out duplicates
         let start_count = remove_files.len();
@@ -409,7 +407,7 @@ impl DirectoryList {
             .into_iter()
             .unique()
             .collect();
-        tracing::debug!("remove_files: initial={}, filtered={}", start_count, remove_files.len());
+        debug!("remove_files: initial={}, filtered={}", start_count, remove_files.len());
 
         // process removed files
         for remove_path in remove_files {
@@ -423,7 +421,7 @@ impl DirectoryList {
                     DirectoryListItem::ParentDir(_) => true,
                     DirectoryListItem::Entry(e) => {
                         if e.name == file_name {
-                            tracing::info!("removing file {}", file_name);
+                            info!("removing file {}", file_name);
                             false
                         } else {
                             true
@@ -440,7 +438,7 @@ impl DirectoryList {
                 self.register_size_calculator(data.clone());
             }
             let filename = data.name.clone();
-            tracing::debug!("Adding file {}", filename);
+            debug!("Adding file {}", filename);
             let data_item = DirectoryListItem::Entry(data);
             self.items.push(data_item);
         }
@@ -453,7 +451,7 @@ impl DirectoryList {
                     match modify_kind {
                         notify::event::ModifyKind::Name(_name_change) => {
                             // notify breaks name changes into 2 separate events
-                            tracing::debug!("name changed: requires heavy refresh");
+                            debug!("name changed: requires heavy refresh");
                             heavy_refresh_needed = true;
                             break;
                         },
@@ -465,7 +463,7 @@ impl DirectoryList {
                                     .to_str()
                                     .expect("unable to convert file_name to str")
                                     .to_string();
-                                tracing::debug!("changing file {}", file_name);
+                                debug!("changing file {}", file_name);
                                 // remove this item from the list
                                 self.items.retain(|item| {
                                     match item {
@@ -485,7 +483,7 @@ impl DirectoryList {
                                     self.register_size_calculator(data.clone());
                                 }
                                 let filename = data.name.clone();
-                                tracing::debug!("Refreshing file {}", filename);
+                                debug!("Refreshing file {}", filename);
                                 let data_item = DirectoryListItem::Entry(data);
                                 self.items.push(data_item);
                             }
@@ -497,7 +495,7 @@ impl DirectoryList {
         }
 
         if heavy_refresh_needed {
-            tracing::debug!("call standard refresh() due to events seen");
+            debug!("call standard refresh() due to events seen");
             self.refresh().expect("refresh() errored");
         } else {
             self.items
@@ -507,7 +505,6 @@ impl DirectoryList {
         Ok(())
     }
 
-    #[tracing::instrument]
     pub(crate) fn refresh(&mut self) -> Result<(), io::Error> {
         self.items.clear();
         // read all the items in the directory

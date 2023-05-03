@@ -21,7 +21,11 @@ use tui::{
     Terminal,
     text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
 };
-use tracing;
+use log::{debug, info, warn};
+use log::LevelFilter;
+use log4rs::append::file::FileAppender;
+use log4rs::encode::pattern::PatternEncoder;
+use log4rs::config::{Appender, Config, Root};
 
 use dir_list::*;
 
@@ -44,8 +48,8 @@ pub enum AppError {
 struct Args {
     #[clap(index = 1)]
     dir_name: Option<String>,
-    #[arg(short, long, default_value_t = 0)]
-    trace: u8
+    #[arg(short, long, default_value_t = 2)]
+    log: u8
 }
 
 struct App {
@@ -252,28 +256,35 @@ enum KeyInputResult {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    let tracing_level: tracing::Level = {
-        if args.trace == 0 {
-            tracing::Level::ERROR
-        } else if args.trace == 1 {
-            tracing::Level::WARN
-        } else if args.trace == 2 {
-            tracing::Level::INFO
-        } else if args.trace == 3 {
-            tracing::Level::DEBUG
-        } else {
-            tracing::Level::TRACE
-        }
-    };
-    // setup tracing
-    let file_appender = tracing_appender::rolling::never("/tmp", "lsls.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-    tracing_subscriber::fmt()
-        .with_writer(non_blocking)
-        .with_max_level(tracing_level)
-        .init();
+    let mut log_level = LevelFilter::Warn;
+    if args.log == 0 {
+        log_level = LevelFilter::Off;
+    } else if args.log == 1 {
+        log_level = LevelFilter::Error;
+    } else if args.log == 2 {
+        // default (WARN)
+    } else if args.log == 3 {
+        log_level = LevelFilter::Info;
+    } else if args.log == 4 {
+        log_level = LevelFilter::Debug;
+    } else if args.log == 5 {
+        log_level = LevelFilter::Trace;
+    }
 
-    tracing::debug!("application started");
+    // setup logging
+    let logfile = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{l} {d} {t} - {m}{n}")))
+        .build("/tmp/lsls.log")?;
+
+    let config = log4rs::config::Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        .build(Root::builder()
+            .appender("logfile")
+            .build(log_level))?;
+
+    log4rs::init_config(config)?;
+
+    debug!("application started");
 
     // setup terminal
     enable_raw_mode()?;
