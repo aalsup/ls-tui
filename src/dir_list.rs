@@ -498,11 +498,15 @@ impl DirectoryList {
             debug!("call standard refresh() due to events seen");
             self.refresh().expect("refresh() errored");
         } else {
-            self.items
-                .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, &self.sort_by));
+            self.sort();
         }
 
         Ok(())
+    }
+
+    pub(crate) fn sort(&mut self) {
+        self.items
+            .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, &self.sort_by));
     }
 
     pub(crate) fn refresh(&mut self) -> Result<(), io::Error> {
@@ -522,8 +526,7 @@ impl DirectoryList {
             .collect();
         self.items
             .insert(0, DirectoryListItem::ParentDir("..".to_string()));
-        self.items
-            .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, &self.sort_by));
+        self.sort();
 
         if self.state.selected() == None {
             self.state.select(Some(0));

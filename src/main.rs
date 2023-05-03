@@ -314,7 +314,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
+fn handle_input_sort_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
     match key.code {
         KeyCode::Char('q') => {
             app.show_popup_sort = false;
@@ -325,6 +325,8 @@ fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
                     .selected()
                     .expect("unable to identify selected sort_by item")
                 ].clone();
+                debug!("sort_by changed to {}", app.dir_list.sort_by.to_string());
+                app.dir_list.sort();
             app.show_popup_sort = false;
         }
         KeyCode::Down | KeyCode::Char('j') => {
@@ -354,7 +356,7 @@ fn handle_input_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
 
 fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
     if app.show_popup_sort {
-        return handle_input_popup(app, key_event);
+        return handle_input_sort_popup(app, key_event);
     }
 
     match key_event.code {
