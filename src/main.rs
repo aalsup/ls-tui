@@ -31,7 +31,6 @@ use dir_list::*;
 
 mod dir_list;
 
-const MAX_EVENTS: usize = 7;
 const TICK_RATE_MILLIS: u64 = 250;
 const SNIPPET_LINES: usize = 50;
 
