@@ -321,7 +321,7 @@ impl DirectoryList {
         Ok(())
     }
 
-    fn register_size_calculator(&mut self, data: DirEntryData) {
+    fn register_size_calculator(&mut self, data: &DirEntryData) {
         if self.dir_size_rx.is_none() {
             // construct a new channel
             let (tx, rx): (Sender<SizeNotification>, Receiver<SizeNotification>) = channel();
@@ -329,25 +329,27 @@ impl DirectoryList {
             self.dir_size_rx = Some(rx);
         }
 
-        let parent_dir = self.dir.clone();
+        let parent_dir = &self.dir;
         if let Some(dir_size_tx) = &self.dir_size_tx {
             let dir_size_tx = dir_size_tx.clone();
+            let cur_path = Path::new(parent_dir.as_str());
+            let file_name = data.name.clone();
+            let file_path = cur_path.join(&file_name).canonicalize()
+                .expect("unable to canonicalize path for getting dir_size");
+
             // execute the expensive `get_size()` in a separate thread (not within the tokio executor)
             thread::spawn(move || {
-                let cur_path = Path::new(parent_dir.as_str());
-                let file_path = cur_path.join(&data.name).canonicalize()
-                    .expect("unable to canonicalize path for getting dir_size");
-                debug!("Computing dir size for {}", data.name.clone());
+                debug!("Computing dir size for {}", &file_name);
                 let start = Instant::now();
                 let dir_size = get_size(file_path).unwrap_or(0);
                 let duration = start.elapsed();
                 dir_size_tx.send(
                     SizeNotification {
-                        name: data.name.clone(),
+                        name: file_name.clone(),
                         size: dir_size,
                     }
                 ).expect("unable to send dir_size_tx from thread");
-                debug!("Dir size for {} in {:?}", data.name.clone(), duration);
+                debug!("Dir size for {} in {:?}", &file_name, duration);
             });
         }
     }
@@ -438,7 +440,7 @@ impl DirectoryList {
         for create_path in create_files {
             let data: DirEntryData = create_path.into();
             if data.file_type.is_dir() || data.file_type.is_symlink() {
-                self.register_size_calculator(data.clone());
+                self.register_size_calculator(&data);
             }
             let filename = data.name.clone();
             debug!("Adding file {}", filename);
@@ -483,7 +485,7 @@ impl DirectoryList {
                                 // refresh the modified file
                                 let data: DirEntryData = path.into();
                                 if data.file_type.is_dir() || data.file_type.is_symlink() {
-                                    self.register_size_calculator(data.clone());
+                                    self.register_size_calculator(&data);
                                 }
                                 let filename = data.name.clone();
                                 debug!("Refreshing file {}", filename);
@@ -521,7 +523,7 @@ impl DirectoryList {
             .map(|x| {
                 let data: DirEntryData = x.into();
                 if data.file_type.is_dir() || data.file_type.is_symlink() {
-                    self.register_size_calculator(data.clone());
+                    self.register_size_calculator(&data);
                 }
                 data
             })
