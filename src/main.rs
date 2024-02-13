@@ -1,5 +1,4 @@
 use std::{io, io::{BufRead, BufReader}};
-use std::error::Error;
 use std::fs::File;
 use std::path::Path;
 use std::sync::mpsc::TryRecvError;
@@ -13,19 +12,20 @@ use crossterm::{
 };
 use crossterm::event::KeyModifiers;
 use thiserror::Error;
+use anyhow::Result;
 use tui::{
     backend::{Backend, CrosstermBackend},
     Frame,
-    layout::{Alignment, Constraint, Corner, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     Terminal,
-    text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table, Wrap},
+    text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table, Wrap},
 };
 use log::{debug, info, warn};
 use log::LevelFilter;
 use log4rs::append::file::FileAppender;
 use log4rs::encode::pattern::PatternEncoder;
-use log4rs::config::{Appender, Config, Root};
+use log4rs::config::{Appender, Root};
 
 use dir_list::*;
 
@@ -136,7 +136,7 @@ impl App {
     }
 
     /// Move to a new directory -- relative paths are ok, absolute paths are ok.
-    fn navigate_to_relative_directory(&mut self, chg_dir: String) -> Result<(), AppError> {
+    fn navigate_to_relative_directory(&mut self, chg_dir: String) -> Result<()> {
         // save the current info
         let cur_path_str = &self.dir.clone();
         let cur_path = Path::new(cur_path_str);
@@ -172,14 +172,14 @@ impl App {
     }
 
     /// Move to the parent of the current directory.
-    fn navigate_to_parent_directory(&mut self) -> Result<(), AppError> {
+    fn navigate_to_parent_directory(&mut self) -> Result<()> {
         self.navigate_to_relative_directory("..".to_string())?;
 
         Ok(())
     }
 
     /// Load a preview of the selected file
-    fn load_preview(&mut self) -> Result<(), io::Error> {
+    fn load_preview(&mut self) -> Result<()> {
         if !self.dir_list.selection_changed {
             // the existing preview is still valid
             return Ok(());
@@ -221,7 +221,7 @@ enum KeyInputResult {
     Stop,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     let mut log_level = LevelFilter::Warn;

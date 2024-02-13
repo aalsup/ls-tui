@@ -1,4 +1,4 @@
-use std::{fmt, fs, io, thread, time};
+use std::{fmt, fs, thread, time};
 use std::cmp::Ordering;
 use std::fs::{DirEntry, FileType, Permissions};
 #[cfg(target_os = "linux")]
@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Instant, SystemTime};
 
+use thiserror::Error;
+use anyhow::Result;
 use byte_unit::{Byte, UnitType};
 use fs_extra::dir::get_size;
 use itertools::Itertools;
@@ -21,8 +23,6 @@ use users::get_user_by_uid;
 use log::{debug, info, warn};
 use chrono::offset::Local;
 use chrono::DateTime;
-
-use crate::AppError;
 
 #[derive(Debug, Clone)]
 pub enum SortByDirection {
@@ -266,7 +266,7 @@ impl DirectoryList {
         }
     }
 
-    pub(crate) fn watch(&mut self) -> Result<(), AppError> {
+    pub(crate) fn watch(&mut self) -> Result<()> {
         match &self.dir_change_tx {
             Some(dir_change_tx) => {
                 // send the new directory to the watcher thread
@@ -356,7 +356,7 @@ impl DirectoryList {
         }
     }
 
-    pub(crate) fn smart_refresh(&mut self, fs_events: Vec<notify::Event>) -> Result<(), io::Error> {
+    pub(crate) fn smart_refresh(&mut self, fs_events: Vec<notify::Event>) -> Result<()> {
         // Bug: `rm file1` generates both Create(File) and Remove(File) events.
         info!("smart_refresh() called with {} events", fs_events.len());
 
@@ -516,7 +516,7 @@ impl DirectoryList {
             .sort_by(|a, b| DirectoryList::compare_dir_items(a, b, &self.sort_by));
     }
 
-    pub(crate) fn refresh(&mut self) -> Result<(), io::Error> {
+    pub(crate) fn refresh(&mut self) -> Result<()> {
         self.items.clear();
         // read all the items in the directory
         self.items = fs::read_dir(self.dir.clone())?
