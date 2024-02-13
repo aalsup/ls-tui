@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Instant, SystemTime};
 
-use byte_unit::Byte;
+use byte_unit::{Byte, UnitType};
 use fs_extra::dir::get_size;
 use itertools::Itertools;
 use notify::{Watcher};
@@ -181,9 +181,11 @@ impl From<DirectoryListItem> for Row<'_> {
                 };
                 let filesize_str = {
                     if let Some(size) = item.size {
-                        let byte = Byte::from_bytes(size.into());
-                        let adjusted_byte = byte.get_appropriate_unit(false);
-                        adjusted_byte.to_string()
+                        //let byte = Byte::from_bytes(size.into());
+                        //let byte = Byte::from(size);
+                        //let adjusted_byte = byte.get_appropriate_unit(UnitType::Decimal);
+                        let adjusted_byte = Byte::from(size).get_appropriate_unit(UnitType::Decimal);
+                        format!("{adjusted_byte:.1}")
                     } else {
                         "...".to_string()
                     }

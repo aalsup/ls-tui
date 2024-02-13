@@ -54,7 +54,7 @@ struct Args {
 struct App {
     dir: String,
     dir_list: DirectoryList,
-    file_snippet: Vec<String>,
+    preview: Vec<String>,
     show_popup_sort: bool,
 }
 
@@ -64,7 +64,7 @@ impl App {
         let mut app = Self {
             dir: dir_name.clone(),
             dir_list: DirectoryList::new(dir_name.clone()),
-            file_snippet: vec![],
+            preview: vec![],
             show_popup_sort: false,
         };
         app.set_dir(dir_name);
@@ -178,13 +178,13 @@ impl App {
         Ok(())
     }
 
-    /// Load a snippet of the selected file into the snippet view.
-    fn load_file_snippet(&mut self) -> Result<(), io::Error> {
+    /// Load a preview of the selected file
+    fn load_preview(&mut self) -> Result<(), io::Error> {
         if !self.dir_list.selection_changed {
-            // the existing snippet is still valid
+            // the existing preview is still valid
             return Ok(());
         }
-        self.file_snippet.clear();
+        self.preview.clear();
         if let Some(sel_idx) = self.dir_list.state.selected() {
             match &self.dir_list.items[sel_idx] {
                 DirectoryListItem::Entry(entry) => {
@@ -198,11 +198,13 @@ impl App {
                                 let reader = BufReader::new(file);
                                 for (index, line) in reader.lines().enumerate() {
                                     if index > SNIPPET_LINES { break; }
-                                    self.file_snippet.push(line
-                                        .expect("unable to add line to snippet"));
+                                    self.preview.push(line
+                                        .expect("unable to add line to preview"));
                                 }
                             }
                         }
+                    } else if entry.file_type.is_dir() {
+                       // TODO: show directory contents
                     }
                 }
                 DirectoryListItem::ParentDir(_) => {}
@@ -360,7 +362,7 @@ fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
             return KeyInputResult::Continue;
         },
 
-        // the remaining keys should refresh the snippet pane
+        // the remaining keys should refresh the preview pane
         KeyCode::Down | KeyCode::Char('j') => {
             app.dir_list.select_next();
         },
@@ -397,7 +399,7 @@ fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
         _ => {}
     }
 
-    app.load_file_snippet().ok();
+    app.load_preview().ok();
 
     return KeyInputResult::Continue;
 }
@@ -480,29 +482,29 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         ]);
     f.render_stateful_widget(table, h_panes[0], &mut app.dir_list.state);
 
-    let snippet_block = Block::default()
+    let preview_block = Block::default()
         .borders(Borders::ALL)
         .style(Style::default())
-        .title("Snippet");
+        .title("Preview");
 
-    let snippet_text: Vec<Spans> = app.file_snippet
+    let preview_text: Vec<Spans> = app.preview
         .iter()
         .map(|s| Spans::from(s.as_str()))
         .collect();
 
     // wrap single-lined files
-    let mut snippet_wrap = Wrap { trim: false };
-    if snippet_text.len() <= 1 {
-        snippet_wrap = Wrap { trim: true };
+    let mut preview_wrap = Wrap { trim: false };
+    if preview_text.len() <= 1 {
+        preview_wrap = Wrap { trim: true };
     }
 
-    let snippet_paragraph = Paragraph::new(snippet_text)
+    let preview_paragraph = Paragraph::new(preview_text)
         .style(Style::default())
-        .block(snippet_block)
-        .wrap(snippet_wrap)
+        .block(preview_block)
+        .wrap(preview_wrap)
         .alignment(Alignment::Left);
 
-    f.render_widget(snippet_paragraph, v_panes[0]);
+    f.render_widget(preview_paragraph, v_panes[0]);
 
     if app.show_popup_sort {
         let sort_by_items: Vec<ListItem> = SortBy::all()
