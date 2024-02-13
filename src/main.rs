@@ -241,7 +241,7 @@ fn main() -> Result<()> {
 
     // setup logging
     let logfile = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{l} {d} {t} - {m}{n}")))
+        .encoder(Box::new(PatternEncoder::new("{l} {d(%Y-%m-%d %H:%M:%S %Z)(utc)} {t} - {m}{n}")))
         .build("/tmp/lsls.log")?;
 
     let config = log4rs::config::Config::builder()
