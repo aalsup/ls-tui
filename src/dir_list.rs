@@ -6,7 +6,7 @@ use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, RecvError, Sender, TryRecvError};
 use std::time::{Instant, SystemTime};
 
 use thiserror::Error;
@@ -23,6 +23,8 @@ use users::get_user_by_uid;
 use log::{debug, info, warn};
 use chrono::offset::Local;
 use chrono::DateTime;
+use retry::delay::Fixed;
+use retry::retry;
 
 #[derive(Debug, Clone)]
 pub enum SortByDirection {
@@ -296,7 +298,7 @@ impl DirectoryList {
                         .expect("unable to watch dir");
                     let mut cur_dir = dir.clone();
                     loop {
-                        let dir_event = dir_change_rx.try_recv();
+                        let dir_event = dir_change_rx.recv();
                         match dir_event {
                             Ok(new_dir) => {
                                 debug!("dir watcher thread received a new dir: {}", new_dir);
@@ -307,15 +309,10 @@ impl DirectoryList {
                                 watcher.watch(Path::new(new_dir.as_str()), notify::RecursiveMode::NonRecursive)
                                     .expect("unable to watch new dir");
                             }
-                            Err(TryRecvError::Empty) => {
-                                // nothing in the channel
-                            }
-                            Err(TryRecvError::Disconnected) => {
+                            Err(RecvError) => {
                                 break;
                             }
                         }
-                        let sleep_millis = time::Duration::from_millis(250);
-                        thread::sleep(sleep_millis);
                     }
                 });
             }
@@ -343,7 +340,11 @@ impl DirectoryList {
             thread::spawn(move || {
                 debug!("Computing dir size for {}", &file_name);
                 let start = Instant::now();
-                let dir_size = get_size(file_path).unwrap_or(0);
+                // retry several times, in case "Too many open files" error
+                let dir_size_result = retry(Fixed::from_millis(250).take(3), || {
+                    get_size(file_path.clone())
+                });
+                let dir_size = dir_size_result.unwrap_or(0);
                 let duration = start.elapsed();
                 dir_size_tx.send(
                     SizeNotification {
