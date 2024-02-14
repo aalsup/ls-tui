@@ -15,14 +15,14 @@ use byte_unit::{Byte, UnitType};
 use fs_extra::dir::get_size;
 use itertools::Itertools;
 use notify::{Watcher};
-use tui::style::{Modifier, Style};
-use tui::widgets::{ListState, Row, TableState};
+use ratatui::{widgets::*};
 use unix_permissions_ext::UNIXPermissionsExt;
 use users::get_user_by_uid;
 
 use log::{debug, info, warn};
 use chrono::offset::Local;
 use chrono::DateTime;
+use ratatui::style::{Color, Modifier, Style};
 use retry::delay::Fixed;
 use retry::retry;
 
@@ -73,7 +73,7 @@ impl fmt::Display for SortBy {
             SortBy::Size(SortByDirection::Asc) => "Size (ASC)".to_string(),
             SortBy::Size(SortByDirection::Dec) => "Size (DEC)".to_string(),
         };
-        write!(f, "{:?}", output)
+        write!(f, "{}", output)
     }
 }
 
@@ -157,9 +157,9 @@ impl From<DirEntry> for DirEntryData {
 
 impl From<DirectoryListItem> for Row<'_> {
     fn from(item: DirectoryListItem) -> Self {
-        let style = Style::default();
-        let dir_style = style.add_modifier(Modifier::BOLD);
-        let link_style = style.add_modifier(Modifier::ITALIC);
+        let default_style = Style::default().fg(Color::White);
+        let dir_style = default_style.fg(Color::LightGreen);
+        let link_style = default_style.add_modifier(Modifier::ITALIC);
 
         match item {
             DirectoryListItem::ParentDir(item) => {
@@ -170,7 +170,7 @@ impl From<DirectoryListItem> for Row<'_> {
             DirectoryListItem::Entry(item) => {
                 let file_name = item.name.clone();
                 // determine the type of file (directory, symlink, etc.)
-                let mut style = Style::default();
+                let mut style = default_style;
                 if item.file_type.is_dir() {
                     style = dir_style;
                 }

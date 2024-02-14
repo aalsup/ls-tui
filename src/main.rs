@@ -5,6 +5,7 @@ use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
+use ratatui::{prelude::*, widgets::*};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent},
     execute,
@@ -13,14 +14,6 @@ use crossterm::{
 use crossterm::event::KeyModifiers;
 use thiserror::Error;
 use anyhow::Result;
-use tui::{
-    backend::{Backend, CrosstermBackend},
-    Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
-    Terminal,
-    text::{Span, Spans}, widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table, Wrap},
-};
 use log::{debug, info, warn};
 use log::LevelFilter;
 use log4rs::append::file::FileAppender;
@@ -56,6 +49,7 @@ struct App {
     dir_list: DirectoryList,
     preview: Vec<String>,
     show_popup_sort: bool,
+    show_popup_help: bool,
 }
 
 impl App {
@@ -66,6 +60,7 @@ impl App {
             dir_list: DirectoryList::new(dir_name.clone()),
             preview: vec![],
             show_popup_sort: false,
+            show_popup_help: false,
         };
         app.set_dir(dir_name);
         app
@@ -280,9 +275,19 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn handle_input_help_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
+   match key.code {
+       KeyCode::Char('q') | KeyCode::Esc => {
+          app.show_popup_help = false;
+       },
+       _ => {}
+   }
+   return KeyInputResult::Continue;
+}
+
 fn handle_input_sort_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
     match key.code {
-        KeyCode::Char('q') => {
+        KeyCode::Char('q') | KeyCode::Esc => {
             app.show_popup_sort = false;
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
@@ -323,6 +328,8 @@ fn handle_input_sort_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
 fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
     if app.show_popup_sort {
         return handle_input_sort_popup(app, key_event);
+    } else if app.show_popup_help {
+        return handle_input_help_popup(app, key_event);
     }
 
     match key_event.code {
@@ -332,6 +339,10 @@ fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
         },
         KeyCode::Char('s') => {
             app.show_popup_sort = !app.show_popup_sort;
+            return KeyInputResult::Continue;
+        },
+        KeyCode::Char('?') => {
+            app.show_popup_help = !app.show_popup_help;
             return KeyInputResult::Continue;
         },
         KeyCode::Char('i') => {
@@ -437,7 +448,7 @@ fn run_app<B: Backend>(
     }
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
+fn ui(f: &mut Frame, app: &mut App) {
     let style = Style::default();
 
     // Create two chunks with equal horizontal screen space
@@ -461,28 +472,29 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         })
         .collect();
 
-    let table = Table::new(rows)
+    let widths = &[
+        Constraint::Length(20),     // name
+        Constraint::Length(10),     // size
+        Constraint::Length(19),     // date
+        Constraint::Length(12),     // user
+        Constraint::Length(5),      // group
+        Constraint::Length(3),      // usr (mask)
+        Constraint::Length(3),      // grp (mask)
+        Constraint::Length(3),      // oth (mask)
+    ];
+
+    let table = Table::new(rows, widths)
         .header(
             Row::new(vec!["Name", "Size", "Modified", "User", "Group", "Usr", "Grp", "Oth"])
                 .style(Style::default().fg(Color::Yellow))
-                .bottom_margin(1),
+                .bottom_margin(0),
         )
-        .highlight_style(style.bg(Color::Gray).fg(Color::DarkGray))
+        .highlight_style(style.bg(Color::Gray).fg(Color::Black))
         .block(
             Block::default()
                 .title(app.dir.as_str())
                 .borders(Borders::ALL),
-        )
-        .widths(&[
-            Constraint::Length(20),     // name
-            Constraint::Length(10),     // size
-            Constraint::Length(19),     // date
-            Constraint::Length(12),     // user
-            Constraint::Length(5),      // group
-            Constraint::Length(3),      // usr (mask)
-            Constraint::Length(3),      // grp (mask)
-            Constraint::Length(3),      // oth (mask)
-        ]);
+        );
     f.render_stateful_widget(table, h_panes[0], &mut app.dir_list.state);
 
     let preview_block = Block::default()
@@ -490,22 +502,22 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .style(Style::default())
         .title("Preview");
 
-    let preview_text: Vec<Spans> = app.preview
+    let preview_lines:Vec<Line> = app.preview
         .iter()
-        .map(|s| Spans::from(s.as_str()))
+        .map(|s| Line::from(s.as_str()))
         .collect();
+    let preview_text: Text = Text::from(preview_lines);
 
-    // wrap single-lined files
-    let mut preview_wrap = Wrap { trim: false };
-    if preview_text.len() <= 1 {
-        preview_wrap = Wrap { trim: true };
-    }
-
-    let preview_paragraph = Paragraph::new(preview_text)
+    let mut preview_paragraph = Paragraph::new(preview_text.clone())
         .style(Style::default())
         .block(preview_block)
-        .wrap(preview_wrap)
         .alignment(Alignment::Left);
+
+    // wrap single-lined files
+    if preview_text.lines.len() <= 1 {
+        let preview_wrap = Wrap { trim: false };
+        preview_paragraph = preview_paragraph.wrap(preview_wrap);
+    }
 
     f.render_widget(preview_paragraph, v_panes[0]);
 
@@ -513,20 +525,48 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         let sort_by_items: Vec<ListItem> = SortBy::all()
             .iter()
             .map(|sort_by| {
-                let span = Spans::from(vec![Span::raw(sort_by.to_string())]);
+                let span = Span::from(sort_by.to_string());
 
-                ListItem::new(vec![span])
+                ListItem::new(span)
             })
             .collect();
         let sort_by_list = List::new(sort_by_items)
-            .highlight_style(style.bg(Color::Gray).fg(Color::DarkGray))
+            .highlight_style(style.bg(Color::Gray).fg(Color::Black))
             .block(Block::default().title("Sort By").borders(Borders::ALL));
         let area = centered_rect(30, 50, f.size());
         if app.dir_list.sort_by_list_state.selected() == None {
             app.dir_list.sort_by_list_state.select(Some(0));
         }
-        f.render_widget(tui::widgets::Clear, area);
+        f.render_widget(Clear, area);
         f.render_stateful_widget(sort_by_list, area, &mut app.dir_list.sort_by_list_state);
+    }
+
+    if app.show_popup_help {
+        let help_vec = vec![
+            "?   -> help",
+            "q   -> quit",
+            "h   -> traverse to parent",
+            "l   -> traverse into item",
+            "j   -> next item",
+            "k   -> previous item",
+            "s   -> sort",
+            "g   -> go to bottom",
+            "G   -> go to top",
+            "r   -> refresh",
+            "ESC -> close popup",
+        ];
+        let help_items: Vec<ListItem> = help_vec
+            .iter()
+            .map(|item_str| {
+                let span = Span::from(item_str.to_string());
+                ListItem::new(span)
+            })
+            .collect();
+        let help_list = List::new(help_items)
+            .block(Block::default().title("Help").borders(Borders::ALL));
+        let area = centered_rect(40, 50, f.size());
+        f.render_widget(Clear, area);
+        f.render_widget(help_list, area);
     }
 }
 
