@@ -378,6 +378,9 @@ fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
         KeyCode::Char('G') => {
             app.dir_list.select_last();
         },
+        KeyCode::Char('r') => {
+            app.dir_list.refresh().ok();
+        },
         // TODO: next-page (CTRL+f)
         KeyCode::Char('f') => {
             match key_event.modifiers {
