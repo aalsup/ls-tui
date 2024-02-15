@@ -1,4 +1,4 @@
-use std::{io, io::{BufRead, BufReader}};
+use std::{cmp, io, io::{BufRead, BufReader}};
 use std::fs::File;
 use std::path::Path;
 use std::sync::mpsc::TryRecvError;
@@ -26,6 +26,15 @@ mod dir_list;
 
 const TICK_RATE_MILLIS: u64 = 250;
 const SNIPPET_LINES: usize = 50;
+
+// Column sizes for UI
+const UI_COL_SIZE: u16 = 10;
+const UI_COL_DATE: u16 = 19;
+const UI_COL_USER: u16 = 12;
+const UI_COL_GROUP: u16 = 5;
+const UI_COL_USR_MASK: u16 = 3;
+const UI_COL_GRP_MASK: u16 = 3;
+const UI_COL_OTH_MASK: u16 = 3;
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -448,20 +457,40 @@ fn run_app<B: Backend>(
     }
 }
 
-fn ui(f: &mut Frame, app: &mut App) {
+fn ui(frame: &mut Frame, app: &mut App) {
     let style = Style::default();
 
     // Create two chunks with equal horizontal screen space
     let h_panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
-        .split(f.size());
+        .split(frame.size());
 
     let v_panes = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
         .split(h_panes[1]);
 
+    // find the longest filename in the current list
+    let longest_filename = app
+        .dir_list
+        .items
+        .iter()
+        .map(|item| {
+            let item = (*item).clone();
+            match item {
+                DirectoryListItem::Entry(item) => {
+                    item.name.len()
+                },
+                DirectoryListItem::ParentDir(item) => {
+                    item.len()
+                }
+            }
+        })
+        .max()
+        .unwrap_or(0);
+
+    // convert all the directory items into UI rows
     let rows: Vec<Row> = app
         .dir_list
         .items
@@ -472,17 +501,22 @@ fn ui(f: &mut Frame, app: &mut App) {
         })
         .collect();
 
+    // calculate the size of the filename column
+    let ui_col_filename = cmp::min(longest_filename as u16, 25) + 1;
+
+    // setup the column widths
     let widths = &[
-        Constraint::Length(20),     // name
-        Constraint::Length(10),     // size
-        Constraint::Length(19),     // date
-        Constraint::Length(12),     // user
-        Constraint::Length(5),      // group
-        Constraint::Length(3),      // usr (mask)
-        Constraint::Length(3),      // grp (mask)
-        Constraint::Length(3),      // oth (mask)
+        Constraint::Length(ui_col_filename),      // name
+        Constraint::Length(UI_COL_SIZE),          // size
+        Constraint::Length(UI_COL_DATE),          // date
+        Constraint::Length(UI_COL_USER),          // user
+        Constraint::Length(UI_COL_GROUP),         // group
+        Constraint::Length(UI_COL_USR_MASK),      // usr (mask)
+        Constraint::Length(UI_COL_GRP_MASK),      // grp (mask)
+        Constraint::Length(UI_COL_OTH_MASK),      // oth (mask)
     ];
 
+    // create the UI table
     let table = Table::new(rows, widths)
         .header(
             Row::new(vec!["Name", "Size", "Modified", "User", "Group", "Usr", "Grp", "Oth"])
@@ -495,7 +529,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                 .title(app.dir.as_str())
                 .borders(Borders::ALL),
         );
-    f.render_stateful_widget(table, h_panes[0], &mut app.dir_list.state);
+    frame.render_stateful_widget(table, h_panes[0], &mut app.dir_list.state);
 
     let preview_block = Block::default()
         .borders(Borders::ALL)
@@ -519,55 +553,65 @@ fn ui(f: &mut Frame, app: &mut App) {
         preview_paragraph = preview_paragraph.wrap(preview_wrap);
     }
 
-    f.render_widget(preview_paragraph, v_panes[0]);
+    frame.render_widget(preview_paragraph, v_panes[0]);
 
     if app.show_popup_sort {
-        let sort_by_items: Vec<ListItem> = SortBy::all()
-            .iter()
-            .map(|sort_by| {
-                let span = Span::from(sort_by.to_string());
-
-                ListItem::new(span)
-            })
-            .collect();
-        let sort_by_list = List::new(sort_by_items)
-            .highlight_style(style.bg(Color::Gray).fg(Color::Black))
-            .block(Block::default().title("Sort By").borders(Borders::ALL));
-        let area = centered_rect(30, 50, f.size());
-        if app.dir_list.sort_by_list_state.selected() == None {
-            app.dir_list.sort_by_list_state.select(Some(0));
-        }
-        f.render_widget(Clear, area);
-        f.render_stateful_widget(sort_by_list, area, &mut app.dir_list.sort_by_list_state);
+        show_popup_sort(frame, app);
     }
 
     if app.show_popup_help {
-        let help_vec = vec![
-            "?   -> help",
-            "q   -> quit",
-            "h   -> traverse to parent",
-            "l   -> traverse into item",
-            "j   -> next item",
-            "k   -> previous item",
-            "s   -> sort",
-            "g   -> go to bottom",
-            "G   -> go to top",
-            "r   -> refresh",
-            "ESC -> close popup",
-        ];
-        let help_items: Vec<ListItem> = help_vec
-            .iter()
-            .map(|item_str| {
-                let span = Span::from(item_str.to_string());
-                ListItem::new(span)
-            })
-            .collect();
-        let help_list = List::new(help_items)
-            .block(Block::default().title("Help").borders(Borders::ALL));
-        let area = centered_rect(40, 50, f.size());
-        f.render_widget(Clear, area);
-        f.render_widget(help_list, area);
+        show_popup_help(frame);
     }
+}
+
+fn show_popup_sort(frame: &mut Frame, app: &mut App) {
+    let default_style = Style::default();
+
+    let sort_by_items: Vec<ListItem> = SortBy::all()
+        .iter()
+        .map(|sort_by| {
+            let span = Span::from(sort_by.to_string());
+
+            ListItem::new(span)
+        })
+        .collect();
+    let sort_by_list = List::new(sort_by_items)
+        .highlight_style(default_style.bg(Color::Gray).fg(Color::Black))
+        .block(Block::default().title("Sort By").borders(Borders::ALL));
+    let area = centered_rect(30, 50, frame.size());
+    if app.dir_list.sort_by_list_state.selected() == None {
+        app.dir_list.sort_by_list_state.select(Some(0));
+    }
+    frame.render_widget(Clear, area);
+    frame.render_stateful_widget(sort_by_list, area, &mut app.dir_list.sort_by_list_state);
+}
+
+fn show_popup_help(frame: &mut Frame) {
+    let help_vec = vec![
+        "?   -> help",
+        "q   -> quit",
+        "h   -> traverse to parent",
+        "l   -> traverse into item",
+        "j   -> next item",
+        "k   -> previous item",
+        "s   -> sort",
+        "g   -> go to bottom",
+        "G   -> go to top",
+        "r   -> refresh",
+        "ESC -> close popup",
+    ];
+    let help_items: Vec<ListItem> = help_vec
+        .iter()
+        .map(|item_str| {
+            let span = Span::from(item_str.to_string());
+            ListItem::new(span)
+        })
+        .collect();
+    let help_list = List::new(help_items)
+        .block(Block::default().title("Help").borders(Borders::ALL));
+    let area = centered_rect(40, 50, frame.size());
+    frame.render_widget(Clear, area);
+    frame.render_widget(help_list, area);
 }
 
 /// helper function to create a centered rect using up certain percentage of the available rect `r`
