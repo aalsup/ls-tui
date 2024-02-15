@@ -77,6 +77,352 @@ impl App {
         app
     }
 
+    fn run<B: Backend> (&mut self, terminal: &mut Terminal<B>,
+                            tick_rate: Duration, ) -> io::Result<()>
+    {
+        let mut last_tick = Instant::now();
+
+        loop {
+            terminal.draw(|f| self.draw(f))?;
+
+            let timeout = tick_rate
+                .checked_sub(last_tick.elapsed())
+                .unwrap_or_else(|| Duration::from_secs(0));
+            if crossterm::event::poll(timeout)? {
+                if let crossterm::event::Event::Key(key) = event::read()? {
+                    match self.handle_input(key) {
+                        KeyInputResult::Stop => {
+                            return Ok(());
+                        }
+                        KeyInputResult::Continue => {}
+                    }
+                }
+            }
+            if last_tick.elapsed() >= tick_rate {
+                self.on_tick();
+                last_tick = Instant::now();
+            }
+        }
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
+        let style = Style::default();
+
+        let (file_pane, preview_pane) = match self.show_preview {
+            true => {
+                // Create two chunks on horizontal screen space
+                let h_panes = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
+                    .split(frame.size());
+                (h_panes[0], Some(h_panes[1]))
+            },
+            false => {
+                // Create two chunks on horizontal screen space
+                let h_panes = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(100), Constraint::Percentage(0)].as_ref())
+                    .split(frame.size());
+                (h_panes[0], None)
+            }
+        };
+
+        // find the longest filename in the current list
+        let longest_filename = self
+            .dir_list
+            .items
+            .iter()
+            .map(|item| {
+                let item = (*item).clone();
+                match item {
+                    DirectoryListItem::Entry(item) => {
+                        item.name.len()
+                    },
+                    DirectoryListItem::ParentDir(item) => {
+                        item.len()
+                    }
+                }
+            })
+            .max()
+            .unwrap_or(0);
+
+        // convert all the directory items into UI rows
+        let rows: Vec<Row> = self
+            .dir_list
+            .items
+            .iter()
+            .map(|item| {
+                let row: Row = (*item).clone().into();
+                row
+            })
+            .collect();
+
+        let max_filename_col_size = match self.show_preview {
+            true => 25,
+            false => 50
+        };
+
+        // calculate the size of the filename column
+        let ui_col_filename = cmp::min(longest_filename as u16, max_filename_col_size) + 1;
+
+        // setup the column widths
+        let widths = &[
+            Constraint::Length(ui_col_filename),      // name
+            Constraint::Length(UI_COL_SIZE),          // size
+            Constraint::Length(UI_COL_DATE),          // date
+            Constraint::Length(UI_COL_USER),          // user
+            Constraint::Length(UI_COL_GROUP),         // group
+            Constraint::Length(UI_COL_USR_MASK),      // usr (mask)
+            Constraint::Length(UI_COL_GRP_MASK),      // grp (mask)
+            Constraint::Length(UI_COL_OTH_MASK),      // oth (mask)
+        ];
+
+        // create the UI table
+        let table = Table::new(rows, widths)
+            .header(
+                Row::new(vec!["Name", "Size", "Modified", "User", "Group", "Usr", "Grp", "Oth"])
+                    .style(Style::default().fg(Color::Yellow))
+                    .bottom_margin(0),
+            )
+            .highlight_style(style.bg(Color::Gray).fg(Color::Black))
+            .block(
+                Block::default()
+                    .title(self.dir.as_str())
+                    .borders(Borders::ALL),
+            );
+        frame.render_stateful_widget(table, file_pane, &mut self.dir_list.state);
+
+        if self.show_preview {
+            let preview_block = Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default())
+                .title("Preview");
+
+            let preview_lines: Vec<Line> = self.preview
+                .iter()
+                .map(|s| Line::from(s.as_str()))
+                .collect();
+            let preview_text: Text = Text::from(preview_lines);
+
+            let mut preview_paragraph = Paragraph::new(preview_text.clone())
+                .style(Style::default())
+                .block(preview_block)
+                .alignment(Alignment::Left);
+
+            // wrap single-lined files
+            if preview_text.lines.len() <= 1 {
+                let preview_wrap = Wrap { trim: false };
+                preview_paragraph = preview_paragraph.wrap(preview_wrap);
+            }
+
+            frame.render_widget(preview_paragraph, preview_pane.unwrap());
+        }
+
+        if self.show_popup_sort {
+            self.show_popup_sort(frame);
+        }
+
+        if self.show_popup_help {
+            self.show_popup_help(frame);
+        }
+    }
+
+    fn handle_input_help_popup(&mut self, key: KeyEvent) -> KeyInputResult {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.show_popup_help = false;
+            },
+            _ => {}
+        }
+        return KeyInputResult::Continue;
+    }
+
+    fn handle_input_sort_popup(&mut self, key: KeyEvent) -> KeyInputResult {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.show_popup_sort = false;
+            },
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                self.dir_list.sort_by = SortBy::all()[
+                    self.dir_list.sort_by_list_state
+                        .selected()
+                        .expect("unable to identify selected sort_by item")
+                    ].clone();
+                debug!("sort_by changed to {}", self.dir_list.sort_by.to_string());
+                self.dir_list.sort();
+                self.show_popup_sort = false;
+            },
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(mut selected_idx) = self.dir_list.sort_by_list_state.selected() {
+                    selected_idx = selected_idx + 1;
+                    if selected_idx < SortBy::all().len() {
+                        self.dir_list.sort_by_list_state.select(Some(selected_idx));
+                    }
+                } else {
+                    self.dir_list.sort_by_list_state.select(Some(0));
+                }
+            },
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(mut selected_idx) = self.dir_list.sort_by_list_state.selected() {
+                    if selected_idx > 0 {
+                        selected_idx = selected_idx - 1;
+                        self.dir_list.sort_by_list_state.select(Some(selected_idx));
+                    }
+                } else {
+                    self.dir_list.sort_by_list_state.select(Some(0));
+                }
+            },
+            _ => {}
+        }
+        return KeyInputResult::Continue;
+    }
+
+    fn handle_input(&mut self, key_event: KeyEvent) -> KeyInputResult {
+        if self.show_popup_sort {
+            return self.handle_input_sort_popup(key_event);
+        } else if self.show_popup_help {
+            return self.handle_input_help_popup(key_event);
+        }
+
+        match key_event.code {
+            KeyCode::Char('q') => {
+                // QUIT -> bail
+                return KeyInputResult::Stop;
+            },
+            KeyCode::Char('p') => {
+                self.show_preview = !self.show_preview;
+            },
+            KeyCode::Char('s') => {
+                self.show_popup_sort = !self.show_popup_sort;
+                return KeyInputResult::Continue;
+            },
+            KeyCode::Char('?') => {
+                self.show_popup_help = !self.show_popup_help;
+                return KeyInputResult::Continue;
+            },
+            KeyCode::Char('i') => {
+                // TODO: show info dialog
+                return KeyInputResult::Continue;
+            },
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') => {
+                // get the selected item
+                if let Some(sel_idx) = self.dir_list.state.selected() {
+                    match &self.dir_list.items[sel_idx] {
+                        DirectoryListItem::ParentDir(chg_dir) => {
+                            self.navigate_to_relative_directory(chg_dir.to_owned()).ok();
+                        }
+                        DirectoryListItem::Entry(entry) => {
+                            if entry.file_type.is_dir() {
+                                self.navigate_to_relative_directory(entry.name.clone()).ok();
+                            } else {
+                                // open the file (unless `l` key was pressed -- that would just be weird)
+                                if key_event.code != KeyCode::Char('l') {
+                                    let cur_path = Path::new(&self.dir);
+                                    let entry_path = cur_path.join(&entry.name);
+                                    let _result = opener::open(entry_path.as_path());
+                                }
+                            }
+                        }
+                    }
+                }
+                return KeyInputResult::Continue;
+            },
+            // the remaining keys should refresh the preview pane
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.dir_list.select_next();
+            },
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.dir_list.select_previous();
+            },
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.navigate_to_parent_directory().ok();
+            },
+            KeyCode::Char('g') => {
+                self.dir_list.select_first();
+            },
+            KeyCode::Char('G') => {
+                self.dir_list.select_last();
+            },
+            KeyCode::Char('r') => {
+                self.dir_list.refresh().ok();
+            },
+            // TODO: next-page (CTRL+f)
+            KeyCode::Char('f') => {
+                match key_event.modifiers {
+                    KeyModifiers::CONTROL => {
+                        // TODO: next page
+                    },
+                    _ => {}
+                }
+            },
+            // TODO: prev-page (CTRL+b)
+            KeyCode::Char('b') => {
+                match key_event.modifiers {
+                    KeyModifiers::CONTROL => {
+                        // TODO: previous page
+                    },
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+
+        self.load_preview().ok();
+
+        return KeyInputResult::Continue;
+    }
+
+    fn show_popup_sort(&mut self, frame: &mut Frame) {
+        let default_style = Style::default();
+
+        let sort_by_items: Vec<ListItem> = SortBy::all()
+            .iter()
+            .map(|sort_by| {
+                let span = Span::from(sort_by.to_string());
+
+                ListItem::new(span)
+            })
+            .collect();
+        let sort_by_list = List::new(sort_by_items)
+            .highlight_style(default_style.bg(Color::Gray).fg(Color::Black))
+            .block(Block::default().title("Sort By").borders(Borders::ALL));
+        let area = centered_rect(30, 50, frame.size());
+        if self.dir_list.sort_by_list_state.selected() == None {
+            self.dir_list.sort_by_list_state.select(Some(0));
+        }
+        frame.render_widget(Clear, area);
+        frame.render_stateful_widget(sort_by_list, area, &mut self.dir_list.sort_by_list_state);
+    }
+
+    fn show_popup_help(&self, frame: &mut Frame) {
+        let help_vec = vec![
+            "?   -> help",
+            "q   -> quit",
+            "p   -> toggle preview pane",
+            "h   -> traverse to parent",
+            "l   -> traverse into item",
+            "j   -> next item",
+            "k   -> previous item",
+            "s   -> sort",
+            "g   -> go to bottom",
+            "G   -> go to top",
+            "r   -> refresh",
+            "ESC -> close popup",
+        ];
+        let help_items: Vec<ListItem> = help_vec
+            .iter()
+            .map(|item_str| {
+                let span = Span::from(item_str.to_string());
+                ListItem::new(span)
+            })
+            .collect();
+        let help_list = List::new(help_items)
+            .block(Block::default().title("Help").borders(Borders::ALL));
+        let area = centered_rect(40, 50, frame.size());
+        frame.render_widget(Clear, area);
+        frame.render_widget(help_list, area);
+    }
+
     fn set_dir(&mut self, new_dir: String) {
         self.dir = Path::new(new_dir.as_str()).canonicalize()
             .expect("unable to canonicalize new directory")
@@ -186,6 +532,9 @@ impl App {
 
     /// Load a preview of the selected file
     fn load_preview(&mut self) -> Result<()> {
+        if !self.show_preview {
+            Ok(())
+        }
         if !self.dir_list.selection_changed {
             // the existing preview is still valid
             return Ok(());
@@ -267,8 +616,8 @@ fn main() -> Result<()> {
 
     // create app and run it
     let tick_rate = Duration::from_millis(TICK_RATE_MILLIS);
-    let app = App::new(args.dir_name.unwrap_or(".".to_string()));
-    let res = run_app(&mut terminal, app, tick_rate);
+    let mut app = App::new(args.dir_name.unwrap_or(".".to_string()));
+    let app_result = app.run(&mut terminal, tick_rate);
 
     // restore terminal
     disable_raw_mode()?;
@@ -279,360 +628,12 @@ fn main() -> Result<()> {
     )?;
     terminal.show_cursor()?;
 
-    if let Err(err) = res {
+    if let Err(err) = app_result {
         println!("{:?}", err);
+        Err(anyhow::Error::from(err))
+    } else {
+        Ok(())
     }
-
-    Ok(())
-}
-
-fn handle_input_help_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
-   match key.code {
-       KeyCode::Char('q') | KeyCode::Esc => {
-          app.show_popup_help = false;
-       },
-       _ => {}
-   }
-   return KeyInputResult::Continue;
-}
-
-fn handle_input_sort_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
-    match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => {
-            app.show_popup_sort = false;
-        },
-        KeyCode::Enter | KeyCode::Char(' ') => {
-            app.dir_list.sort_by = SortBy::all()[
-                app.dir_list.sort_by_list_state
-                    .selected()
-                    .expect("unable to identify selected sort_by item")
-                ].clone();
-                debug!("sort_by changed to {}", app.dir_list.sort_by.to_string());
-                app.dir_list.sort();
-            app.show_popup_sort = false;
-        },
-        KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(mut selected_idx) = app.dir_list.sort_by_list_state.selected() {
-                selected_idx = selected_idx + 1;
-                if selected_idx < SortBy::all().len() {
-                    app.dir_list.sort_by_list_state.select(Some(selected_idx));
-                }
-            } else {
-                app.dir_list.sort_by_list_state.select(Some(0));
-            }
-        },
-        KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(mut selected_idx) = app.dir_list.sort_by_list_state.selected() {
-                if selected_idx > 0 {
-                    selected_idx = selected_idx - 1;
-                    app.dir_list.sort_by_list_state.select(Some(selected_idx));
-                }
-            } else {
-                app.dir_list.sort_by_list_state.select(Some(0));
-            }
-        },
-        _ => {}
-    }
-    return KeyInputResult::Continue;
-}
-
-fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
-    if app.show_popup_sort {
-        return handle_input_sort_popup(app, key_event);
-    } else if app.show_popup_help {
-        return handle_input_help_popup(app, key_event);
-    }
-
-    match key_event.code {
-        KeyCode::Char('q') => {
-            // QUIT -> bail
-            return KeyInputResult::Stop;
-        },
-        KeyCode::Char('p') => {
-            app.show_preview = !app.show_preview;
-        },
-        KeyCode::Char('s') => {
-            app.show_popup_sort = !app.show_popup_sort;
-            return KeyInputResult::Continue;
-        },
-        KeyCode::Char('?') => {
-            app.show_popup_help = !app.show_popup_help;
-            return KeyInputResult::Continue;
-        },
-        KeyCode::Char('i') => {
-            // TODO: show info dialog
-            return KeyInputResult::Continue;
-        },
-        KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') => {
-            // get the selected item
-            if let Some(sel_idx) = app.dir_list.state.selected() {
-                match &app.dir_list.items[sel_idx] {
-                    DirectoryListItem::ParentDir(chg_dir) => {
-                        app.navigate_to_relative_directory(chg_dir.to_owned()).ok();
-                    }
-                    DirectoryListItem::Entry(entry) => {
-                        if entry.file_type.is_dir() {
-                            app.navigate_to_relative_directory(entry.name.clone()).ok();
-                        } else {
-                            // open the file (unless `l` key was pressed -- that would just be weird)
-                            if key_event.code != KeyCode::Char('l') {
-                                let cur_path = Path::new(&app.dir);
-                                let entry_path = cur_path.join(&entry.name);
-                                let _result = opener::open(entry_path.as_path());
-                            }
-                        }
-                    }
-                }
-            }
-            return KeyInputResult::Continue;
-        },
-        // the remaining keys should refresh the preview pane
-        KeyCode::Down | KeyCode::Char('j') => {
-            app.dir_list.select_next();
-        },
-        KeyCode::Up | KeyCode::Char('k') => {
-            app.dir_list.select_previous();
-        },
-        KeyCode::Left | KeyCode::Char('h') => {
-            app.navigate_to_parent_directory().ok();
-        },
-        KeyCode::Char('g') => {
-            app.dir_list.select_first();
-        },
-        KeyCode::Char('G') => {
-            app.dir_list.select_last();
-        },
-        KeyCode::Char('r') => {
-            app.dir_list.refresh().ok();
-        },
-        // TODO: next-page (CTRL+f)
-        KeyCode::Char('f') => {
-            match key_event.modifiers {
-                KeyModifiers::CONTROL => {
-                    // TODO: next page
-                },
-                _ => {}
-            }
-        },
-        // TODO: prev-page (CTRL+b)
-        KeyCode::Char('b') => {
-            match key_event.modifiers {
-                KeyModifiers::CONTROL => {
-                    // TODO: previous page
-                },
-                _ => {}
-            }
-        }
-        _ => {}
-    }
-
-    app.load_preview().ok();
-
-    return KeyInputResult::Continue;
-}
-
-fn run_app<B: Backend>(
-    terminal: &mut Terminal<B>,
-    mut app: App,
-    tick_rate: Duration,
-) -> io::Result<()> {
-    let mut last_tick = Instant::now();
-
-    loop {
-        terminal.draw(|f| ui(f, &mut app))?;
-
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
-        if crossterm::event::poll(timeout)? {
-            if let crossterm::event::Event::Key(key) = event::read()? {
-                match handle_input(&mut app, key) {
-                    KeyInputResult::Stop => {
-                        return Ok(());
-                    }
-                    KeyInputResult::Continue => {}
-                }
-            }
-        }
-        if last_tick.elapsed() >= tick_rate {
-            app.on_tick();
-            last_tick = Instant::now();
-        }
-    }
-}
-
-fn ui(frame: &mut Frame, app: &mut App) {
-    let style = Style::default();
-
-    let (file_pane, preview_pane) = match app.show_preview {
-        true => {
-            // Create two chunks on horizontal screen space
-            let h_panes = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
-                .split(frame.size());
-            (h_panes[0], Some(h_panes[1]))
-        },
-        false => {
-            // Create two chunks on horizontal screen space
-            let h_panes = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(100), Constraint::Percentage(0)].as_ref())
-                .split(frame.size());
-            (h_panes[0], None)
-        }
-    };
-
-
-    // find the longest filename in the current list
-    let longest_filename = app
-        .dir_list
-        .items
-        .iter()
-        .map(|item| {
-            let item = (*item).clone();
-            match item {
-                DirectoryListItem::Entry(item) => {
-                    item.name.len()
-                },
-                DirectoryListItem::ParentDir(item) => {
-                    item.len()
-                }
-            }
-        })
-        .max()
-        .unwrap_or(0);
-
-    // convert all the directory items into UI rows
-    let rows: Vec<Row> = app
-        .dir_list
-        .items
-        .iter()
-        .map(|item| {
-            let row: Row = (*item).clone().into();
-            row
-        })
-        .collect();
-
-    let max_filename_col_size = match app.show_preview {
-        true => 25,
-        false => 50
-    };
-
-    // calculate the size of the filename column
-    let ui_col_filename = cmp::min(longest_filename as u16, max_filename_col_size) + 1;
-
-    // setup the column widths
-    let widths = &[
-        Constraint::Length(ui_col_filename),      // name
-        Constraint::Length(UI_COL_SIZE),          // size
-        Constraint::Length(UI_COL_DATE),          // date
-        Constraint::Length(UI_COL_USER),          // user
-        Constraint::Length(UI_COL_GROUP),         // group
-        Constraint::Length(UI_COL_USR_MASK),      // usr (mask)
-        Constraint::Length(UI_COL_GRP_MASK),      // grp (mask)
-        Constraint::Length(UI_COL_OTH_MASK),      // oth (mask)
-    ];
-
-    // create the UI table
-    let table = Table::new(rows, widths)
-        .header(
-            Row::new(vec!["Name", "Size", "Modified", "User", "Group", "Usr", "Grp", "Oth"])
-                .style(Style::default().fg(Color::Yellow))
-                .bottom_margin(0),
-        )
-        .highlight_style(style.bg(Color::Gray).fg(Color::Black))
-        .block(
-            Block::default()
-                .title(app.dir.as_str())
-                .borders(Borders::ALL),
-        );
-    frame.render_stateful_widget(table, file_pane, &mut app.dir_list.state);
-
-    if app.show_preview {
-        let preview_block = Block::default()
-            .borders(Borders::ALL)
-            .style(Style::default())
-            .title("Preview");
-
-        let preview_lines: Vec<Line> = app.preview
-            .iter()
-            .map(|s| Line::from(s.as_str()))
-            .collect();
-        let preview_text: Text = Text::from(preview_lines);
-
-        let mut preview_paragraph = Paragraph::new(preview_text.clone())
-            .style(Style::default())
-            .block(preview_block)
-            .alignment(Alignment::Left);
-
-        // wrap single-lined files
-        if preview_text.lines.len() <= 1 {
-            let preview_wrap = Wrap { trim: false };
-            preview_paragraph = preview_paragraph.wrap(preview_wrap);
-        }
-
-        frame.render_widget(preview_paragraph, preview_pane.unwrap());
-    }
-
-    if app.show_popup_sort {
-        show_popup_sort(frame, app);
-    }
-
-    if app.show_popup_help {
-        show_popup_help(frame);
-    }
-}
-
-fn show_popup_sort(frame: &mut Frame, app: &mut App) {
-    let default_style = Style::default();
-
-    let sort_by_items: Vec<ListItem> = SortBy::all()
-        .iter()
-        .map(|sort_by| {
-            let span = Span::from(sort_by.to_string());
-
-            ListItem::new(span)
-        })
-        .collect();
-    let sort_by_list = List::new(sort_by_items)
-        .highlight_style(default_style.bg(Color::Gray).fg(Color::Black))
-        .block(Block::default().title("Sort By").borders(Borders::ALL));
-    let area = centered_rect(30, 50, frame.size());
-    if app.dir_list.sort_by_list_state.selected() == None {
-        app.dir_list.sort_by_list_state.select(Some(0));
-    }
-    frame.render_widget(Clear, area);
-    frame.render_stateful_widget(sort_by_list, area, &mut app.dir_list.sort_by_list_state);
-}
-
-fn show_popup_help(frame: &mut Frame) {
-    let help_vec = vec![
-        "?   -> help",
-        "q   -> quit",
-        "p   -> toggle preview pane",
-        "h   -> traverse to parent",
-        "l   -> traverse into item",
-        "j   -> next item",
-        "k   -> previous item",
-        "s   -> sort",
-        "g   -> go to bottom",
-        "G   -> go to top",
-        "r   -> refresh",
-        "ESC -> close popup",
-    ];
-    let help_items: Vec<ListItem> = help_vec
-        .iter()
-        .map(|item_str| {
-            let span = Span::from(item_str.to_string());
-            ListItem::new(span)
-        })
-        .collect();
-    let help_list = List::new(help_items)
-        .block(Block::default().title("Help").borders(Borders::ALL));
-    let area = centered_rect(40, 50, frame.size());
-    frame.render_widget(Clear, area);
-    frame.render_widget(help_list, area);
 }
 
 /// helper function to create a centered rect using up certain percentage of the available rect `r`
