@@ -57,6 +57,7 @@ struct App {
     dir: String,
     dir_list: DirectoryList,
     preview: Vec<String>,
+    show_preview: bool,
     show_popup_sort: bool,
     show_popup_help: bool,
 }
@@ -68,6 +69,7 @@ impl App {
             dir: dir_name.clone(),
             dir_list: DirectoryList::new(dir_name.clone()),
             preview: vec![],
+            show_preview: true,
             show_popup_sort: false,
             show_popup_help: false,
         };
@@ -298,7 +300,7 @@ fn handle_input_sort_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => {
             app.show_popup_sort = false;
-        }
+        },
         KeyCode::Enter | KeyCode::Char(' ') => {
             app.dir_list.sort_by = SortBy::all()[
                 app.dir_list.sort_by_list_state
@@ -308,7 +310,7 @@ fn handle_input_sort_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
                 debug!("sort_by changed to {}", app.dir_list.sort_by.to_string());
                 app.dir_list.sort();
             app.show_popup_sort = false;
-        }
+        },
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(mut selected_idx) = app.dir_list.sort_by_list_state.selected() {
                 selected_idx = selected_idx + 1;
@@ -318,7 +320,7 @@ fn handle_input_sort_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
             } else {
                 app.dir_list.sort_by_list_state.select(Some(0));
             }
-        }
+        },
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(mut selected_idx) = app.dir_list.sort_by_list_state.selected() {
                 if selected_idx > 0 {
@@ -328,7 +330,7 @@ fn handle_input_sort_popup(app: &mut App, key: KeyEvent) -> KeyInputResult {
             } else {
                 app.dir_list.sort_by_list_state.select(Some(0));
             }
-        }
+        },
         _ => {}
     }
     return KeyInputResult::Continue;
@@ -345,6 +347,9 @@ fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
         KeyCode::Char('q') => {
             // QUIT -> bail
             return KeyInputResult::Stop;
+        },
+        KeyCode::Char('p') => {
+            app.show_preview = !app.show_preview;
         },
         KeyCode::Char('s') => {
             app.show_popup_sort = !app.show_popup_sort;
@@ -381,7 +386,6 @@ fn handle_input(app: &mut App, key_event: KeyEvent) -> KeyInputResult {
             }
             return KeyInputResult::Continue;
         },
-
         // the remaining keys should refresh the preview pane
         KeyCode::Down | KeyCode::Char('j') => {
             app.dir_list.select_next();
@@ -460,16 +464,25 @@ fn run_app<B: Backend>(
 fn ui(frame: &mut Frame, app: &mut App) {
     let style = Style::default();
 
-    // Create two chunks with equal horizontal screen space
-    let h_panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
-        .split(frame.size());
+    let (file_pane, preview_pane) = match app.show_preview {
+        true => {
+            // Create two chunks on horizontal screen space
+            let h_panes = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
+                .split(frame.size());
+            (h_panes[0], Some(h_panes[1]))
+        },
+        false => {
+            // Create two chunks on horizontal screen space
+            let h_panes = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(100), Constraint::Percentage(0)].as_ref())
+                .split(frame.size());
+            (h_panes[0], None)
+        }
+    };
 
-    let v_panes = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
-        .split(h_panes[1]);
 
     // find the longest filename in the current list
     let longest_filename = app
@@ -501,8 +514,13 @@ fn ui(frame: &mut Frame, app: &mut App) {
         })
         .collect();
 
+    let max_filename_col_size = match app.show_preview {
+        true => 25,
+        false => 50
+    };
+
     // calculate the size of the filename column
-    let ui_col_filename = cmp::min(longest_filename as u16, 25) + 1;
+    let ui_col_filename = cmp::min(longest_filename as u16, max_filename_col_size) + 1;
 
     // setup the column widths
     let widths = &[
@@ -529,31 +547,33 @@ fn ui(frame: &mut Frame, app: &mut App) {
                 .title(app.dir.as_str())
                 .borders(Borders::ALL),
         );
-    frame.render_stateful_widget(table, h_panes[0], &mut app.dir_list.state);
+    frame.render_stateful_widget(table, file_pane, &mut app.dir_list.state);
 
-    let preview_block = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default())
-        .title("Preview");
+    if app.show_preview {
+        let preview_block = Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default())
+            .title("Preview");
 
-    let preview_lines:Vec<Line> = app.preview
-        .iter()
-        .map(|s| Line::from(s.as_str()))
-        .collect();
-    let preview_text: Text = Text::from(preview_lines);
+        let preview_lines: Vec<Line> = app.preview
+            .iter()
+            .map(|s| Line::from(s.as_str()))
+            .collect();
+        let preview_text: Text = Text::from(preview_lines);
 
-    let mut preview_paragraph = Paragraph::new(preview_text.clone())
-        .style(Style::default())
-        .block(preview_block)
-        .alignment(Alignment::Left);
+        let mut preview_paragraph = Paragraph::new(preview_text.clone())
+            .style(Style::default())
+            .block(preview_block)
+            .alignment(Alignment::Left);
 
-    // wrap single-lined files
-    if preview_text.lines.len() <= 1 {
-        let preview_wrap = Wrap { trim: false };
-        preview_paragraph = preview_paragraph.wrap(preview_wrap);
+        // wrap single-lined files
+        if preview_text.lines.len() <= 1 {
+            let preview_wrap = Wrap { trim: false };
+            preview_paragraph = preview_paragraph.wrap(preview_wrap);
+        }
+
+        frame.render_widget(preview_paragraph, preview_pane.unwrap());
     }
-
-    frame.render_widget(preview_paragraph, v_panes[0]);
 
     if app.show_popup_sort {
         show_popup_sort(frame, app);
@@ -590,6 +610,7 @@ fn show_popup_help(frame: &mut Frame) {
     let help_vec = vec![
         "?   -> help",
         "q   -> quit",
+        "p   -> toggle preview pane",
         "h   -> traverse to parent",
         "l   -> traverse into item",
         "j   -> next item",
