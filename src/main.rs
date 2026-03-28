@@ -7,14 +7,13 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use ratatui::{prelude::*, widgets::*};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent},
+    event::{self, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use crossterm::event::KeyModifiers;
 use thiserror::Error;
-use anyhow::Result;
-use log::{debug, info, warn};
+use anyhow::{anyhow, Result};
+use log::{debug, error, info, warn};
 use log::LevelFilter;
 use log4rs::append::file::FileAppender;
 use log4rs::encode::pattern::PatternEncoder;
@@ -27,7 +26,7 @@ mod dir_list;
 const TICK_RATE_MILLIS: u64 = 250;
 const SNIPPET_LINES: usize = 50;
 
-// Column sizes for UI
+// Column widths for UI
 const UI_COL_SIZE: u16 = 10;
 const UI_COL_DATE: u16 = 19;
 const UI_COL_USER: u16 = 12;
@@ -78,16 +77,27 @@ impl App {
     }
 
     fn run<B: Backend> (&mut self, terminal: &mut Terminal<B>,
-                            tick_rate: Duration, ) -> io::Result<()>
+                            tick_rate: Duration, ) -> Result<()>
     {
         let mut last_tick = Instant::now();
 
+        // this is the main loop
         loop {
-            terminal.draw(|f| self.draw(f))?;
+           let draw_result = terminal.draw(|f| self.draw(f))
+                .or_else(|e| {
+                    error!("Unable to draw terminal: {}", e);
+                    Err(e)
+                });
+            if (draw_result.is_err()) {
+                let err = draw_result.unwrap_err();
+                return Err(anyhow!(err.to_string()));
+            }
 
             let timeout = tick_rate
                 .checked_sub(last_tick.elapsed())
                 .unwrap_or_else(|| Duration::from_secs(0));
+
+            // check if any events have happened
             if crossterm::event::poll(timeout)? {
                 if let crossterm::event::Event::Key(key) = event::read()? {
                     match self.handle_input(key) {
@@ -379,7 +389,6 @@ impl App {
             .iter()
             .map(|sort_by| {
                 let span = Span::from(sort_by.to_string());
-
                 ListItem::new(span)
             })
             .collect();
@@ -399,10 +408,10 @@ impl App {
             "?   -> help",
             "q   -> quit",
             "p   -> toggle preview pane",
-            "h   -> traverse to parent",
-            "l   -> traverse into item",
-            "j   -> next item",
-            "k   -> previous item",
+            "h   -> traverse to parent - <LEFT>",
+            "l   -> traverse into item - <SPACE> <ENTER>",
+            "j   -> next item - <DOWN>",
+            "k   -> previous item - <UP>",
             "s   -> sort",
             "g   -> go to bottom",
             "G   -> go to top",
@@ -533,7 +542,7 @@ impl App {
     /// Load a preview of the selected file
     fn load_preview(&mut self) -> Result<()> {
         if !self.show_preview {
-            Ok(())
+            return Ok(());
         }
         if !self.dir_list.selection_changed {
             // the existing preview is still valid
