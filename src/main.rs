@@ -1,4 +1,5 @@
-use std::{cmp, io, io::{BufRead, BufReader}};
+use std::{cmp, fs, io, io::{BufRead, BufReader}};
+use std::fmt::format;
 use std::fs::File;
 use std::path::Path;
 use std::sync::mpsc::TryRecvError;
@@ -143,7 +144,6 @@ impl App {
             .items
             .iter()
             .map(|item| {
-                let item = (*item).clone();
                 match item {
                     DirectoryListItem::Entry(item) => {
                         item.name.len()
@@ -194,7 +194,7 @@ impl App {
                     .style(Style::default().fg(Color::Yellow))
                     .bottom_margin(0),
             )
-            .highlight_style(style.bg(Color::Gray).fg(Color::Black))
+            .row_highlight_style(style.bg(Color::Gray).fg(Color::Black))
             .block(
                 Block::default()
                     .title(self.dir.as_str())
@@ -529,6 +529,9 @@ impl App {
             self.dir_list.state.select(Some(0));
         }
 
+        // clear the preview
+        self.preview.clear();
+
         Ok(())
     }
 
@@ -552,12 +555,11 @@ impl App {
         if let Some(sel_idx) = self.dir_list.state.selected() {
             match &self.dir_list.items[sel_idx] {
                 DirectoryListItem::Entry(entry) => {
+                    let cur_path = Path::new(&self.dir);
+                    let entry_path = cur_path.join(&entry.name);
                     if entry.file_type.is_file() {
-                        let cur_dir = self.dir.clone();
-                        let cur_path = Path::new(&cur_dir);
-                        let entry_path = cur_path.join(&entry.name);
                         if let Some(mime_type) = tree_magic_mini::from_filepath(entry_path.as_path()) {
-                            if mime_type.starts_with("text") {
+                            if mime_type.contains("text") {
                                 let file = File::open(entry_path)?;
                                 let reader = BufReader::new(file);
                                 for (index, line) in reader.lines().enumerate() {
@@ -565,10 +567,21 @@ impl App {
                                     self.preview.push(line
                                         .expect("unable to add line to preview"));
                                 }
+                            } else {
+                                self.preview.push("*** preview not available ***".to_string());
+                                self.preview.push(format!("file type: {}", mime_type).to_string());
                             }
                         }
                     } else if entry.file_type.is_dir() {
-                       // TODO: show directory contents
+                        let paths = fs::read_dir(entry_path.as_path())?;
+                        for (i, path) in paths.enumerate() {
+                            if i > SNIPPET_LINES { break; }
+                            let path = path?;
+                            let mut filename = path.file_name().into_string()
+                                .expect("unable to get filename");
+                            filename.insert_str(0, "./");
+                            self.preview.push(filename);
+                        }
                     }
                 }
                 DirectoryListItem::ParentDir(_) => {}
