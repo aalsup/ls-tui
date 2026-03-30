@@ -13,11 +13,13 @@ use crossterm::{
 };
 use thiserror::Error;
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Local};
 use log::{debug, error};
 use log::LevelFilter;
 use log4rs::append::file::FileAppender;
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::config::{Appender, Root};
+use num_format::{Locale, ToFormattedString};
 
 use dir_list::*;
 
@@ -428,15 +430,21 @@ impl App {
             self.show_popup = None;
             return
         };
-        let mut info_vec = vec![
-            "",
-        ];
+        let mut info_vec : Vec<String> = vec![];
         match item {
             DirectoryListItem::Entry(e) => {
                 if e.file_type.is_dir() {
-                    info_vec.push("Type: Directory");
+                    info_vec.push("Type: Directory".to_string());
                 } else {
-                    info_vec.push("Type: File");
+                    info_vec.push("Type: File".to_string());
+                    info_vec.push(format!("Name: {}", e.name));
+                    let size = e.size.unwrap_or(0);
+                    info_vec.push(format!("Size: {}", size.to_formatted_string(&Locale::en)));
+                    let datetime_str: String = {
+                        let datetime: DateTime<Local> = e.modified.into();
+                        datetime.format("%Y-%m-%d %T").to_string()
+                    };
+                    info_vec.push(format!("Modified: {}", datetime_str));
                 }
             },
             DirectoryListItem::ParentDir(_) => {
@@ -447,7 +455,7 @@ impl App {
         let info_items: Vec<ListItem> = info_vec
             .iter()
             .map(|item_str| {
-                let span = Span::from(item_str.to_string());
+                let span = Span::from(item_str);
                 ListItem::new(span)
             })
             .collect();
