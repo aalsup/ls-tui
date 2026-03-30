@@ -53,13 +53,23 @@ struct Args {
     log: u8
 }
 
+enum PopupType {
+    Help,
+    Sort,
+    Info,
+}
+
+enum KeyInputResult {
+    Continue,
+    Stop,
+}
+
 struct App {
     dir: String,
     dir_list: DirectoryList,
     preview: Vec<String>,
     show_preview: bool,
-    show_popup_sort: bool,
-    show_popup_help: bool,
+    show_popup: Option<PopupType>,
 }
 
 impl App {
@@ -70,8 +80,7 @@ impl App {
             dir_list: DirectoryList::new(dir_name.clone()),
             preview: vec![],
             show_preview: true,
-            show_popup_sort: false,
-            show_popup_help: false,
+            show_popup: None,
         };
         app.set_dir(dir_name);
         app
@@ -228,29 +237,33 @@ impl App {
             frame.render_widget(preview_paragraph, preview_pane.unwrap());
         }
 
-        if self.show_popup_sort {
-            self.show_popup_sort(frame);
-        }
-
-        if self.show_popup_help {
-            self.show_popup_help(frame);
+        match (self.show_popup) {
+            Some(PopupType::Sort) => self.show_popup_sort(frame),
+            Some(PopupType::Help) => self.show_popup_help(frame),
+            Some(PopupType::Info) => self.show_popup_info(frame),
+            None => {},
         }
     }
 
     fn handle_input_help_popup(&mut self, key: KeyEvent) -> KeyInputResult {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.show_popup_help = false;
+                self.show_popup = None;
             },
             _ => {}
         }
-        return KeyInputResult::Continue;
+        KeyInputResult::Continue
+    }
+
+    fn handle_input_info_popup(&mut self, key: KeyEvent) -> KeyInputResult {
+        self.show_popup = None;
+        KeyInputResult::Continue
     }
 
     fn handle_input_sort_popup(&mut self, key: KeyEvent) -> KeyInputResult {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.show_popup_sort = false;
+                self.show_popup = None;
             },
             KeyCode::Enter | KeyCode::Char(' ') => {
                 self.dir_list.sort_by = SortBy::all()[
@@ -260,7 +273,7 @@ impl App {
                     ].clone();
                 debug!("sort_by changed to {}", self.dir_list.sort_by.to_string());
                 self.dir_list.sort();
-                self.show_popup_sort = false;
+                self.show_popup = None;
             },
             KeyCode::Down | KeyCode::Char('j') => {
                 if let Some(mut selected_idx) = self.dir_list.sort_by_list_state.selected() {
@@ -284,14 +297,21 @@ impl App {
             },
             _ => {}
         }
-        return KeyInputResult::Continue;
+        KeyInputResult::Continue
     }
 
     fn handle_input(&mut self, key_event: KeyEvent) -> KeyInputResult {
-        if self.show_popup_sort {
-            return self.handle_input_sort_popup(key_event);
-        } else if self.show_popup_help {
-            return self.handle_input_help_popup(key_event);
+        match (self.show_popup) {
+            Some(PopupType::Sort) => {
+                return self.handle_input_sort_popup(key_event);
+            },
+            Some(PopupType::Help) => {
+                return self.handle_input_help_popup(key_event);
+            },
+            Some(PopupType::Info) => {
+                return self.handle_input_info_popup(key_event);
+            },
+            None => {},
         }
 
         match key_event.code {
@@ -303,15 +323,16 @@ impl App {
                 self.show_preview = !self.show_preview;
             },
             KeyCode::Char('s') => {
-                self.show_popup_sort = !self.show_popup_sort;
+                self.show_popup = Some(PopupType::Sort);
                 return KeyInputResult::Continue;
             },
             KeyCode::Char('?') => {
-                self.show_popup_help = !self.show_popup_help;
+                self.show_popup = Some(PopupType::Help);
                 return KeyInputResult::Continue;
             },
             KeyCode::Char('i') => {
                 // TODO: show info dialog
+                self.show_popup = Some(PopupType::Info);
                 return KeyInputResult::Continue;
             },
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') => {
@@ -379,7 +400,7 @@ impl App {
 
         self.load_preview().ok();
 
-        return KeyInputResult::Continue;
+        KeyInputResult::Continue
     }
 
     fn show_popup_sort(&mut self, frame: &mut Frame) {
@@ -401,6 +422,41 @@ impl App {
         }
         frame.render_widget(Clear, area);
         frame.render_stateful_widget(sort_by_list, area, &mut self.dir_list.sort_by_list_state);
+    }
+
+    fn show_popup_info(&mut self, frame: &mut Frame) {
+        let Some(item) = self.dir_list.get_selected_item() else {
+            self.show_popup = None;
+            return
+        };
+        let mut info_vec = vec![
+            "",
+        ];
+        match (item) {
+            DirectoryListItem::Entry(e) => {
+                if (e.file_type.is_dir()) {
+                    info_vec.push("Type: Directory");
+                } else {
+                    info_vec.push("Type: File");
+                }
+            },
+            DirectoryListItem::ParentDir(p) => {
+                self.show_popup = None;
+                return;
+            }
+        }
+        let info_items: Vec<ListItem> = info_vec
+            .iter()
+            .map(|item_str| {
+                let span = Span::from(item_str.to_string());
+                ListItem::new(span)
+            })
+            .collect();
+        let info_list = List::new(info_items)
+            .block(Block::default().title("Info").borders(Borders::ALL));
+        let area = centered_rect(40, 50, frame.size());
+        frame.render_widget(Clear, area);
+        frame.render_widget(info_list, area);
     }
 
     fn show_popup_help(&self, frame: &mut Frame) {
@@ -591,11 +647,6 @@ impl App {
         self.dir_list.selection_changed = false;
         Ok(())
     }
-}
-
-enum KeyInputResult {
-    Continue,
-    Stop,
 }
 
 fn main() -> Result<()> {

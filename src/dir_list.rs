@@ -595,6 +595,13 @@ impl DirectoryList {
         }
     }
 
+    pub(crate) fn get_selected_item(&self) -> Option<&DirectoryListItem> {
+        match self.state.selected() {
+            Some(i) => self.items.get(i),
+            None => None,
+        }
+    }
+
     /// Select the first DirectoryListItem with the given name.
     /// If none exists, nothing will be selected.
     pub(crate) fn select_by_name(&mut self, name: &str) {
