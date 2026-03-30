@@ -342,7 +342,7 @@ impl DirectoryList {
                 let start = Instant::now();
                 // retry several times, in case "Too many open files" error
                 let dir_size_result = retry(Fixed::from_millis(250).take(3), || {
-                    get_size(file_path.clone())
+                    get_size(&file_path)
                 });
                 let dir_size = dir_size_result.unwrap_or(0);
                 let duration = start.elapsed();
@@ -445,7 +445,7 @@ impl DirectoryList {
             if data.file_type.is_dir() || data.file_type.is_symlink() {
                 self.register_size_calculator(&data);
             }
-            let filename = data.name.clone();
+            let filename = &data.name;
             debug!("Adding file {}", filename);
             let data_item = DirectoryListItem::Entry(data);
             self.items.push(data_item);
@@ -490,7 +490,7 @@ impl DirectoryList {
                                 if data.file_type.is_dir() || data.file_type.is_symlink() {
                                     self.register_size_calculator(&data);
                                 }
-                                let filename = data.name.clone();
+                                let filename = &data.name;
                                 debug!("Refreshing file {}", filename);
                                 let data_item = DirectoryListItem::Entry(data);
                                 self.items.push(data_item);
@@ -520,7 +520,7 @@ impl DirectoryList {
     pub(crate) fn refresh(&mut self) -> Result<()> {
         self.items.clear();
         // read all the items in the directory
-        self.items = fs::read_dir(self.dir.clone())?
+        self.items = fs::read_dir(&self.dir)?
             .into_iter()
             .map(|x| x.expect("unable to get DirEntry from iterator"))
             .map(|x| {
@@ -602,8 +602,8 @@ impl DirectoryList {
         for (i, x) in self.items.iter().enumerate() {
             match x {
                 DirectoryListItem::Entry(entry) => {
-                    let fname = entry.name.to_string();
-                    if name.eq(fname.as_str()) {
+                    let fname = entry.name.as_str();
+                    if name.eq(fname) {
                         self.state.select(Some(i));
                         self.selection_changed = true;
                         break;
