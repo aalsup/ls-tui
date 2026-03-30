@@ -1,4 +1,4 @@
-use std::{fmt, fs, thread, time};
+use std::{fmt, fs, thread};
 use std::cmp::Ordering;
 use std::fs::{DirEntry, FileType, Permissions};
 #[cfg(target_os = "linux")]
@@ -6,10 +6,9 @@ use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, RecvError, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, RecvError, Sender};
 use std::time::{Instant, SystemTime};
 
-use thiserror::Error;
 use anyhow::Result;
 use byte_unit::{Byte, UnitType};
 use fs_extra::dir::get_size;
@@ -19,7 +18,7 @@ use ratatui::{widgets::*};
 use unix_permissions_ext::UNIXPermissionsExt;
 use users::get_user_by_uid;
 
-use log::{debug, info, warn};
+use log::{debug, info};
 use chrono::offset::Local;
 use chrono::DateTime;
 use ratatui::style::{Color, Modifier, Style};

@@ -1,5 +1,4 @@
 use std::{cmp, fs, io, io::{BufRead, BufReader}};
-use std::fmt::format;
 use std::fs::File;
 use std::path::Path;
 use std::sync::mpsc::TryRecvError;
@@ -14,7 +13,7 @@ use crossterm::{
 };
 use thiserror::Error;
 use anyhow::{anyhow, Result};
-use log::{debug, error, info, warn};
+use log::{debug, error};
 use log::LevelFilter;
 use log4rs::append::file::FileAppender;
 use log4rs::encode::pattern::PatternEncoder;
@@ -98,7 +97,7 @@ impl App {
                     error!("Unable to draw terminal: {}", e);
                     Err(e)
                 });
-            if (draw_result.is_err()) {
+            if draw_result.is_err() {
                 let err = draw_result.unwrap_err();
                 return Err(anyhow!(err.to_string()));
             }
@@ -134,7 +133,7 @@ impl App {
                 let h_panes = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
-                    .split(frame.size());
+                    .split(frame.area());
                 (h_panes[0], Some(h_panes[1]))
             },
             false => {
@@ -142,7 +141,7 @@ impl App {
                 let h_panes = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(100), Constraint::Percentage(0)].as_ref())
-                    .split(frame.size());
+                    .split(frame.area());
                 (h_panes[0], None)
             }
         };
@@ -237,7 +236,7 @@ impl App {
             frame.render_widget(preview_paragraph, preview_pane.unwrap());
         }
 
-        match (self.show_popup) {
+        match self.show_popup {
             Some(PopupType::Sort) => self.show_popup_sort(frame),
             Some(PopupType::Help) => self.show_popup_help(frame),
             Some(PopupType::Info) => self.show_popup_info(frame),
@@ -255,7 +254,7 @@ impl App {
         KeyInputResult::Continue
     }
 
-    fn handle_input_info_popup(&mut self, key: KeyEvent) -> KeyInputResult {
+    fn handle_input_info_popup(&mut self, _: KeyEvent) -> KeyInputResult {
         self.show_popup = None;
         KeyInputResult::Continue
     }
@@ -301,7 +300,7 @@ impl App {
     }
 
     fn handle_input(&mut self, key_event: KeyEvent) -> KeyInputResult {
-        match (self.show_popup) {
+        match self.show_popup {
             Some(PopupType::Sort) => {
                 return self.handle_input_sort_popup(key_event);
             },
@@ -416,7 +415,7 @@ impl App {
         let sort_by_list = List::new(sort_by_items)
             .highlight_style(default_style.bg(Color::Gray).fg(Color::Black))
             .block(Block::default().title("Sort By").borders(Borders::ALL));
-        let area = centered_rect(30, 50, frame.size());
+        let area = centered_rect(30, 50, frame.area());
         if self.dir_list.sort_by_list_state.selected() == None {
             self.dir_list.sort_by_list_state.select(Some(0));
         }
@@ -432,15 +431,15 @@ impl App {
         let mut info_vec = vec![
             "",
         ];
-        match (item) {
+        match item {
             DirectoryListItem::Entry(e) => {
-                if (e.file_type.is_dir()) {
+                if e.file_type.is_dir() {
                     info_vec.push("Type: Directory");
                 } else {
                     info_vec.push("Type: File");
                 }
             },
-            DirectoryListItem::ParentDir(p) => {
+            DirectoryListItem::ParentDir(_) => {
                 self.show_popup = None;
                 return;
             }
@@ -454,7 +453,7 @@ impl App {
             .collect();
         let info_list = List::new(info_items)
             .block(Block::default().title("Info").borders(Borders::ALL));
-        let area = centered_rect(40, 50, frame.size());
+        let area = centered_rect(40, 50, frame.area());
         frame.render_widget(Clear, area);
         frame.render_widget(info_list, area);
     }
@@ -483,7 +482,7 @@ impl App {
             .collect();
         let help_list = List::new(help_items)
             .block(Block::default().title("Help").borders(Borders::ALL));
-        let area = centered_rect(40, 50, frame.size());
+        let area = centered_rect(40, 50, frame.area());
         frame.render_widget(Clear, area);
         frame.render_widget(help_list, area);
     }
