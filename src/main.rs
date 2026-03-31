@@ -71,6 +71,7 @@ struct App {
     preview: Vec<String>,
     show_preview: bool,
     show_popup: Option<PopupType>,
+    visible_rows: u16,
 }
 
 impl App {
@@ -82,6 +83,7 @@ impl App {
             preview: vec![],
             show_preview: true,
             show_popup: None,
+            visible_rows: 10,
         };
         app.set_dir(dir_name);
         app
@@ -244,6 +246,9 @@ impl App {
             Some(PopupType::Info) => self.show_popup_info(frame),
             None => {},
         }
+
+        // figure out how many rows are visible
+        self.visible_rows = frame.area().height;
     }
 
     fn handle_input_help_popup(&mut self, key: KeyEvent) -> KeyInputResult {
@@ -380,7 +385,7 @@ impl App {
             KeyCode::Char('f') => {
                 match key_event.modifiers {
                     KeyModifiers::CONTROL => {
-                        self.dir_list.scroll_down();
+                        self.dir_list.scroll_forward(self.visible_rows);
                     },
                     _ => {}
                 }
@@ -388,7 +393,7 @@ impl App {
             KeyCode::Char('b') => {
                 match key_event.modifiers {
                     KeyModifiers::CONTROL => {
-                        self.dir_list.scroll_up();
+                        self.dir_list.scroll_backward(self.visible_rows);
                     },
                     _ => {}
                 }
@@ -480,8 +485,8 @@ impl App {
             "l      -> traverse into item - <SPACE> <ENTER>",
             "j      -> next item - <DOWN>",
             "k      -> previous item - <UP>",
-            "ctrl+f -> scroll down",
-            "ctrl+b -> scroll up",
+            "ctrl+f -> scroll forward",
+            "ctrl+b -> scroll backward",
             "s      -> sort",
             "g      -> go to bottom",
             "G      -> go to top",

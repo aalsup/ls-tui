@@ -627,8 +627,8 @@ impl DirectoryList {
         }
     }
 
-    pub(crate) fn scroll_down(&mut self) {
-        let mut scroll_amount: u16 = 40;
+    pub(crate) fn scroll_forward(&mut self, visible_rows: u16) {
+        let mut scroll_amount = visible_rows;
         let mut idx: usize = 0;
         match self.state.selected() {
             Some(i) => {
@@ -650,9 +650,8 @@ impl DirectoryList {
         }
     }
 
-    pub(crate) fn scroll_up(&mut self) {
-        // TODO: how to figure out how many rows are visible on the screen?
-        let mut scroll_amount: u16 = 40;
+    pub(crate) fn scroll_backward(&mut self, visible_rows: u16) {
+        let mut scroll_amount = visible_rows;
         let mut idx: usize = 0;
         match self.state.selected() {
             Some(i) => {
