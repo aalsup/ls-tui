@@ -84,6 +84,7 @@ pub struct DirEntryData {
     pub uid: u32,
     pub gid: u32,
     pub permissions: Permissions,
+    pub created: SystemTime,
     pub modified: SystemTime,
 }
 
@@ -110,6 +111,8 @@ impl From<&PathBuf> for DirEntryData {
         let uid = meta.st_uid();
         let gid = meta.st_gid();
         let permissions = meta.permissions();
+        let created = meta.created()
+            .expect("Unable to get created from DirEntry");
         let modified = meta.modified()
             .expect("Unable to get modified from DirEntry");
         DirEntryData {
@@ -119,6 +122,7 @@ impl From<&PathBuf> for DirEntryData {
             uid,
             gid,
             permissions,
+            created,
             modified,
         }
     }
@@ -140,6 +144,8 @@ impl From<DirEntry> for DirEntryData {
         let uid = meta.st_uid();
         let gid = meta.st_gid();
         let permissions = meta.permissions();
+        let created = meta.created()
+            .expect("Unable to get created from DirEntry");
         let modified = meta.modified()
             .expect("Unable to get modified from DirEntry");
         DirEntryData {
@@ -149,6 +155,7 @@ impl From<DirEntry> for DirEntryData {
             uid,
             gid,
             permissions,
+            created,
             modified,
         }
     }
@@ -617,6 +624,53 @@ impl DirectoryList {
                 }
                 _ => {}
             }
+        }
+    }
+
+    pub(crate) fn scroll_down(&mut self) {
+        let mut scroll_amount: u16 = 40;
+        let mut idx: usize = 0;
+        match self.state.selected() {
+            Some(i) => {
+                if (i + scroll_amount as usize) < self.items.len() {
+                    idx = i + scroll_amount as usize;
+                } else {
+                    scroll_amount = (self.items.len() - i) as u16;
+                    idx = self.items.len() - 1;
+                }
+            }
+            None => {
+                scroll_amount = 0;
+            }
+        };
+        if scroll_amount > 0 {
+            self.state.scroll_down_by(scroll_amount);
+            self.state.select(Some(idx));
+            self.selection_changed = true;
+        }
+    }
+
+    pub(crate) fn scroll_up(&mut self) {
+        // TODO: how to figure out how many rows are visible on the screen?
+        let mut scroll_amount: u16 = 40;
+        let mut idx: usize = 0;
+        match self.state.selected() {
+            Some(i) => {
+                if (scroll_amount as usize) > i {
+                    scroll_amount = i as u16;
+                    idx = 0;
+                } else {
+                    idx = i - scroll_amount as usize
+                }
+            }
+            None => {
+                scroll_amount = 0;
+            },
+        };
+        if scroll_amount > 0 {
+            self.state.scroll_up_by(scroll_amount);
+            self.state.select(Some(idx));
+            self.selection_changed = true;
         }
     }
 

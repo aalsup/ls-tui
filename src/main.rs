@@ -332,7 +332,6 @@ impl App {
                 return KeyInputResult::Continue;
             },
             KeyCode::Char('i') => {
-                // TODO: show info dialog
                 self.show_popup = Some(PopupType::Info);
                 return KeyInputResult::Continue;
             },
@@ -378,20 +377,18 @@ impl App {
             KeyCode::Char('r') => {
                 self.dir_list.refresh().ok();
             },
-            // TODO: next-page (CTRL+f)
             KeyCode::Char('f') => {
                 match key_event.modifiers {
                     KeyModifiers::CONTROL => {
-                        // TODO: next page
+                        self.dir_list.scroll_down();
                     },
                     _ => {}
                 }
             },
-            // TODO: prev-page (CTRL+b)
             KeyCode::Char('b') => {
                 match key_event.modifiers {
                     KeyModifiers::CONTROL => {
-                        // TODO: previous page
+                        self.dir_list.scroll_up();
                     },
                     _ => {}
                 }
@@ -433,18 +430,25 @@ impl App {
         let mut info_vec : Vec<String> = vec![];
         match item {
             DirectoryListItem::Entry(e) => {
-                if e.file_type.is_dir() {
-                    info_vec.push("Type: Directory".to_string());
-                } else {
+                info_vec.push(format!("Name: {}", e.name));
+                if e.file_type.is_file() {
                     info_vec.push("Type: File".to_string());
-                    info_vec.push(format!("Name: {}", e.name));
                     let size = e.size.unwrap_or(0);
                     info_vec.push(format!("Size: {}", size.to_formatted_string(&Locale::en)));
-                    let datetime_str: String = {
-                        let datetime: DateTime<Local> = e.modified.into();
-                        datetime.format("%Y-%m-%d %T").to_string()
-                    };
-                    info_vec.push(format!("Modified: {}", datetime_str));
+                    {
+                        let modified_dt: DateTime<Local> = e.modified.into();
+                        let modified_dt_str = modified_dt.format("%Y-%m-%d %T").to_string();
+                        info_vec.push(format!("Modified: {}", modified_dt_str));
+                    }
+                    {
+                        let created_dt: DateTime<Local> = e.created.into();
+                        let created_dt_str = created_dt.format("%Y-%m-%d %T").to_string();
+                        info_vec.push(format!("Created: {}", created_dt_str));
+                    }
+                } else if e.file_type.is_dir() {
+                    info_vec.push("Type: Directory".to_string());
+                } else if e.file_type.is_symlink() {
+                    info_vec.push("Type: Symlink".to_string());
                 }
             },
             DirectoryListItem::ParentDir(_) => {
@@ -466,20 +470,23 @@ impl App {
         frame.render_widget(info_list, area);
     }
 
+    // TODO: use a table (rather than a list) for better formatting of alternate key combos
     fn show_popup_help(&self, frame: &mut Frame) {
         let help_vec = vec![
-            "?   -> help",
-            "q   -> quit",
-            "p   -> toggle preview pane",
-            "h   -> traverse to parent - <LEFT>",
-            "l   -> traverse into item - <SPACE> <ENTER>",
-            "j   -> next item - <DOWN>",
-            "k   -> previous item - <UP>",
-            "s   -> sort",
-            "g   -> go to bottom",
-            "G   -> go to top",
-            "r   -> refresh",
-            "ESC -> close popup",
+            "?      -> help",
+            "q      -> quit",
+            "p      -> toggle preview pane",
+            "h      -> traverse to parent - <LEFT>",
+            "l      -> traverse into item - <SPACE> <ENTER>",
+            "j      -> next item - <DOWN>",
+            "k      -> previous item - <UP>",
+            "ctrl+f -> scroll down",
+            "ctrl+b -> scroll up",
+            "s      -> sort",
+            "g      -> go to bottom",
+            "G      -> go to top",
+            "r      -> refresh",
+            "ESC    -> close popup",
         ];
         let help_items: Vec<ListItem> = help_vec
             .iter()
