@@ -1,4 +1,4 @@
-use std::{cmp, fs, io, io::{BufRead, BufReader}};
+use std::{fs, io, io::{BufRead, BufReader}};
 use std::fs::File;
 use std::path::Path;
 use std::sync::mpsc::TryRecvError;
@@ -161,24 +161,6 @@ impl App {
             }
         };
 
-        // find the longest filename in the current list
-        let longest_filename = self
-            .dir_list
-            .items
-            .iter()
-            .map(|item| {
-                match item {
-                    DirectoryListItem::Entry(item) => {
-                        item.name.len()
-                    },
-                    DirectoryListItem::ParentDir(item) => {
-                        item.len()
-                    }
-                }
-            })
-            .max()
-            .unwrap_or(0);
-
         // convert all the directory items into UI rows
         let rows: Vec<Row> = self
             .dir_list
@@ -190,17 +172,9 @@ impl App {
             })
             .collect();
 
-        let max_filename_col_size = match self.show_preview {
-            true => 25,
-            false => 50
-        };
-
-        // calculate the size of the filename column
-        let ui_col_filename = cmp::min(longest_filename as u16, max_filename_col_size) + 1;
-
         // setup the column widths
         let widths = &[
-            Constraint::Length(ui_col_filename),      // name
+            Constraint::Fill(1),                      // name
             Constraint::Length(UI_COL_SIZE),          // size
             Constraint::Length(UI_COL_DATE),          // date
             Constraint::Length(UI_COL_USER),          // user
@@ -210,8 +184,8 @@ impl App {
             Constraint::Length(UI_COL_OTH_MASK),      // oth (mask)
         ];
 
-        // create the UI table
-        let table = Table::new(rows, widths)
+        // create the file listing table
+        let file_list_table = Table::new(rows, widths)
             .header(
                 Row::new(vec!["Name", "Size", "Modified", "User", "Group", "Usr", "Grp", "Oth"])
                     .style(Style::default().fg(Color::Yellow))
@@ -223,20 +197,11 @@ impl App {
                     .title(self.dir.as_str())
                     .borders(Borders::ALL),
             );
+
         // render the file_pane
-        frame.render_stateful_widget(table, file_pane, &mut self.dir_list.state);
+        frame.render_stateful_widget(file_list_table, file_pane, &mut self.dir_list.state);
 
-        // render the status_pane
-        let status_text = format!("{} of {} items",
-            (self.dir_list.state.selected().unwrap_or(0) + 1).to_formatted_string(&Locale::en),
-            self.dir_list.items.len().to_formatted_string(&Locale::en));
-        frame.render_widget(
-            Paragraph::new(status_text)
-                .block(Block::default()
-                    .borders(Borders::NONE)
-                    .padding(Padding::ZERO)),
-           status_pane);
-
+        // render the preview pane
         if self.show_preview {
             let preview_block = Block::default()
                 .borders(Borders::ALL)
@@ -262,6 +227,17 @@ impl App {
 
             frame.render_widget(preview_paragraph, preview_pane.unwrap());
         }
+
+        // render the status_pane
+        let status_text = format!("{} of {} items",
+                                  (self.dir_list.state.selected().unwrap_or(0) + 1).to_formatted_string(&Locale::en),
+                                  self.dir_list.items.len().to_formatted_string(&Locale::en));
+        frame.render_widget(
+            Paragraph::new(status_text)
+                .block(Block::default()
+                    .borders(Borders::NONE)
+                    .padding(Padding::ZERO)),
+            status_pane);
 
         match self.show_popup {
             Some(PopupType::Sort) => self.show_popup_sort(frame),
