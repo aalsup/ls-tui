@@ -20,7 +20,6 @@ use log4rs::append::file::FileAppender;
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::config::{Appender, Root};
 use num_format::{Locale, ToFormattedString};
-
 use dir_list::*;
 
 mod dir_list;
@@ -131,13 +130,24 @@ impl App {
     fn draw(&mut self, frame: &mut Frame) {
         let style = Style::default();
 
+        // create the main layout (top is file_pane|preview_pane, bottom is status_pane)
+        let outer_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(1)].as_ref())
+            .spacing(0)
+            .split(frame.area());
+
+        let main_pane = outer_layout[0];
+        let status_pane = outer_layout[1];
+
         let (file_pane, preview_pane) = match self.show_preview {
             true => {
                 // Create two chunks on horizontal screen space
                 let h_panes = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
-                    .split(frame.area());
+                    //.spacing(0)
+                    .split(main_pane);
                 (h_panes[0], Some(h_panes[1]))
             },
             false => {
@@ -145,7 +155,8 @@ impl App {
                 let h_panes = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(100), Constraint::Percentage(0)].as_ref())
-                    .split(frame.area());
+                    //.spacing(0)
+                    .split(main_pane);
                 (h_panes[0], None)
             }
         };
@@ -212,7 +223,19 @@ impl App {
                     .title(self.dir.as_str())
                     .borders(Borders::ALL),
             );
+        // render the file_pane
         frame.render_stateful_widget(table, file_pane, &mut self.dir_list.state);
+
+        // render the status_pane
+        let status_text = format!("{} of {} items",
+            (self.dir_list.state.selected().unwrap_or(0) + 1).to_formatted_string(&Locale::en),
+            self.dir_list.items.len().to_formatted_string(&Locale::en));
+        frame.render_widget(
+            Paragraph::new(status_text)
+                .block(Block::default()
+                    .borders(Borders::NONE)
+                    .padding(Padding::ZERO)),
+           status_pane);
 
         if self.show_preview {
             let preview_block = Block::default()
@@ -438,18 +461,20 @@ impl App {
                 info_vec.push(format!("Name: {}", e.name));
                 if e.file_type.is_file() {
                     info_vec.push("Type: File".to_string());
+                    let cur_path = Path::new(&self.dir);
+                    let entry_path = cur_path.join(&e.name);
+                    info_vec.push(format!("Path: {}", entry_path.display()));
+                    if let Some(mime_type) = tree_magic_mini::from_filepath(entry_path.as_path()) {
+                        info_vec.push(format!("Mime: {}", mime_type));
+                    }
                     let size = e.size.unwrap_or(0);
-                    info_vec.push(format!("Size: {}", size.to_formatted_string(&Locale::en)));
-                    {
-                        let modified_dt: DateTime<Local> = e.modified.into();
-                        let modified_dt_str = modified_dt.format("%Y-%m-%d %T").to_string();
-                        info_vec.push(format!("Modified: {}", modified_dt_str));
-                    }
-                    {
-                        let created_dt: DateTime<Local> = e.created.into();
-                        let created_dt_str = created_dt.format("%Y-%m-%d %T").to_string();
-                        info_vec.push(format!("Created: {}", created_dt_str));
-                    }
+                    info_vec.push(format!("Size: {} bytes", size.to_formatted_string(&Locale::en)));
+                    let created_dt: DateTime<Local> = e.created.into();
+                    let created_dt_str = created_dt.format("%Y-%m-%d %T").to_string();
+                    info_vec.push(format!("Created: {}", created_dt_str));
+                    let modified_dt: DateTime<Local> = e.modified.into();
+                    let modified_dt_str = modified_dt.format("%Y-%m-%d %T").to_string();
+                    info_vec.push(format!("Modified: {}", modified_dt_str));
                 } else if e.file_type.is_dir() {
                     info_vec.push("Type: Directory".to_string());
                 } else if e.file_type.is_symlink() {
