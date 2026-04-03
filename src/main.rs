@@ -529,7 +529,7 @@ impl App {
             if let Some(rx) = self.dir_list.dir_watch_rx.as_mut() {
                 match rx.try_recv() {
                     Ok(event) => {
-                        fs_events.push(event.clone());
+                        fs_events.push(event.to_owned());
                         debug!("FS ev: {:?}:{:?}", event.kind, event.paths);
                     },
                     Err(TryRecvError::Empty) => {

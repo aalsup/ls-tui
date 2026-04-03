@@ -274,10 +274,11 @@ impl DirectoryList {
         }
     }
 
+    /// Creates a thread that watches the current directory for changes
     pub(crate) fn watch(&mut self) -> Result<()> {
         match &self.dir_change_tx {
             Some(dir_change_tx) => {
-                // send the new directory to the watcher thread
+                // notify the watcher thread that the directory has changed
                 let new_dir = self.dir.clone();
                 let dir_change_tx = dir_change_tx.clone();
                 dir_change_tx.send(new_dir)
@@ -291,6 +292,7 @@ impl DirectoryList {
                 let (dir_watch_tx, dir_watch_rx): (Sender<notify::Event>, Receiver<notify::Event>) = channel();
                 self.dir_watch_tx = Some(dir_watch_tx.clone());
                 self.dir_watch_rx = Some(dir_watch_rx);
+                // setup the watcher thread, which will listen for directory changes
                 thread::spawn(move || {
                     let mut watcher = notify::recommended_watcher(move |res| {
                         match res {
@@ -315,7 +317,8 @@ impl DirectoryList {
                                 watcher.watch(Path::new(new_dir.as_str()), notify::RecursiveMode::NonRecursive)
                                     .expect("unable to watch new dir");
                             }
-                            Err(RecvError) => {
+                            Err(e) => {
+                                debug!("dir watcher thread got RecvError: {}", e);
                                 break;
                             }
                         }
@@ -326,6 +329,7 @@ impl DirectoryList {
         Ok(())
     }
 
+    /// Creates a thread that calculates the size of a directory (recursively).
     fn register_size_calculator(&mut self, data: &DirEntryData) {
         if self.dir_size_rx.is_none() {
             // construct a new channel
@@ -342,7 +346,7 @@ impl DirectoryList {
             let file_path = cur_path.join(&file_name).canonicalize()
                 .expect("unable to canonicalize path for getting dir_size");
 
-            // execute the expensive `get_size()` in a separate thread (not within the tokio executor)
+            // execute the expensive `get_size()` in a separate thread
             thread::spawn(move || {
                 debug!("Computing dir size for {}", &file_name);
                 let start = Instant::now();
@@ -352,13 +356,13 @@ impl DirectoryList {
                 });
                 let dir_size = dir_size_result.unwrap_or(0);
                 let duration = start.elapsed();
+                debug!("Dir size for {} in {:?}", &file_name, duration);
                 dir_size_tx.send(
                     SizeNotification {
-                        name: file_name.clone(),
+                        name: file_name,
                         size: dir_size,
                     }
                 ).expect("unable to send dir_size_tx from thread");
-                debug!("Dir size for {} in {:?}", &file_name, duration);
             });
         }
     }
