@@ -167,7 +167,7 @@ impl App {
             .items
             .iter()
             .map(|item| {
-                let row: Row = (*item).clone().into();
+                let row= Row::from(item);
                 row
             })
             .collect();
@@ -212,7 +212,7 @@ impl App {
                 .iter()
                 .map(|s| Line::from(s.as_str()))
                 .collect();
-            let preview_text: Text = Text::from(preview_lines);
+            let preview_text = Text::from(preview_lines);
 
             let mut preview_paragraph = Paragraph::new(preview_text.clone())
                 .style(Style::default())
@@ -246,8 +246,8 @@ impl App {
             None => {},
         }
 
-        // figure out how many rows are visible
-        self.visible_rows = frame.area().height;
+        // figure out how many rows are visible in the file_pane (minus 2 for top border and header)
+        self.visible_rows = file_pane.height - 2;
     }
 
     fn handle_input_help_popup(&mut self, key: KeyEvent) -> KeyInputResult {

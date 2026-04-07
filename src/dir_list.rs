@@ -6,7 +6,7 @@ use std::os::linux::fs::MetadataExt;
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, RecvError, Sender};
+use std::sync::mpsc::{channel, Receiver,  Sender};
 use std::time::{Instant, SystemTime};
 
 use anyhow::Result;
@@ -170,6 +170,71 @@ impl From<DirectoryListItem> for Row<'_> {
         match item {
             DirectoryListItem::ParentDir(item) => {
                 let file_name = item;
+                //Row::new(vec![file_name.as_str()]).style(dir_style)
+                Row::new(vec![file_name]).style(dir_style)
+            }
+            DirectoryListItem::Entry(item) => {
+                let file_name = item.name.clone();
+                // determine the type of file (directory, symlink, etc.)
+                let mut style = default_style;
+                if item.file_type.is_dir() {
+                    style = dir_style;
+                }
+                if item.file_type.is_symlink() {
+                    style = link_style;
+                };
+                let datetime_str: String = {
+                    let datetime: DateTime<Local> = item.modified.into();
+                    datetime.format("%Y-%m-%d %T").to_string()
+                };
+                let filesize_str = {
+                    if let Some(size) = item.size {
+                        //let byte = Byte::from_bytes(size.into());
+                        //let byte = Byte::from(size);
+                        //let adjusted_byte = byte.get_appropriate_unit(UnitType::Decimal);
+                        let adjusted_byte = Byte::from(size).get_appropriate_unit(UnitType::Decimal);
+                        format!("{adjusted_byte:.1}")
+                    } else {
+                        "...".to_string()
+                    }
+                };
+                let mut user = item.uid.to_string();
+                if let Some(uname) = get_user_by_uid(item.uid) {
+                    user = uname.name().to_os_string().into_string()
+                        .expect("unable to convert username to string");
+                }
+                let gid = item.gid.to_string();
+                let perms = item.permissions.clone();
+                let perms_str = perms.stringify();
+                let user_perms = perms_str[0..3].to_string();
+                let group_perms = perms_str[3..6].to_string();
+                let other_perms = perms_str[6..9].to_string();
+
+                Row::new(vec![
+                    file_name,
+                    filesize_str,
+                    datetime_str,
+                    user,
+                    gid,
+                    user_perms,
+                    group_perms,
+                    other_perms,
+                ])
+                    .style(style)
+            }
+        }
+    }
+}
+
+impl <'a> From<&'a DirectoryListItem> for Row<'_> {
+    fn from(item: &'a DirectoryListItem) -> Self {
+        let default_style = Style::default().fg(Color::White);
+        let dir_style = default_style.fg(Color::LightGreen);
+        let link_style = default_style.add_modifier(Modifier::ITALIC);
+
+        match item {
+            DirectoryListItem::ParentDir(item) => {
+                let file_name = item.clone();
                 //Row::new(vec![file_name.as_str()]).style(dir_style)
                 Row::new(vec![file_name]).style(dir_style)
             }
