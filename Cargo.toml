@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 ratatui = "0.30.0"
 crossterm = "0.29.0"
-clap = { version = "4.6.0", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 byte-unit = "5.2.0"
 unix_permissions_ext = "0.1.2"
 users = "0.11.0"
@@ -31,3 +31,6 @@ log4rs = "1.4.0"
 chrono = "0.4.44"
 retry = "2.2.0"
 num-format = "0.4.4"
+
+[profile.release]
+debug = true

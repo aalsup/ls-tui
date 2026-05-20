@@ -369,7 +369,7 @@ impl DirectoryList {
                     }).expect("unable to create recommended_watcher");
                     watcher.watch(Path::new(dir.as_str()), notify::RecursiveMode::NonRecursive)
                         .expect("unable to watch dir");
-                    let mut cur_dir = dir.clone();
+                    let mut cur_dir = dir;
                     loop {
                         let dir_event = dir_change_rx.recv();
                         match dir_event {

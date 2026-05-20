@@ -784,4 +784,16 @@ mod tests {
         println!("absolute dir: {}", app.dir);
         assert_eq!("/tmp".to_string(), app.dir);
     }
+
+    #[test]
+    fn test_navigate_to_large_directory() {
+        let current_dir = std::env::current_dir().unwrap();
+        debug!("current dir: {}", current_dir.display());
+
+        let mut app = App::new(".".to_string());
+
+        app.navigate_to_relative_directory("./target/debug/deps".to_string()).unwrap();
+        println!("absolute dir: {}", app.dir);
+        assert!(app.dir.ends_with("/ls-tui/target/debug/deps"));
+    }
 }
